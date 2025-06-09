@@ -1,0 +1,2766 @@
+---
+title: "Exploratory Mediation Analysis of the Example Datasets of the HIMA Library"
+author: "Nandish Verma"
+output: html_document
+---
+
+```{r setup, include=FALSE, error=TRUE}
+knitr::opts_chunk$set(echo = TRUE, error=TRUE, warning=FALSE)
+```
+
+## Introduction
+
+This report provides an exploratory mediation analysis of the example datasets provided in the HIMA library by Hinan Zheng. The objective of this analysis is to understand the necessity in accounting for mediators in analyzing cause and effect relationships, as well as to understand how the estimation of the contributions pathway relates to other elements of the data. To obtain these estimates, we'll use the functions provided in the HIMA library to identify the mediators, and use the alpha and beta coefficients provided in the outputs of the functions to get a numerical value for the estimates.
+
+## Pseudocode Explanations of HIMA Functions
+
+### classicHIMA(X, M, Y, ...)
+
+-   **Set Up Analysis**
+
+    -   Identify outcome family based on `Y.type` ("gaussian" for continuous, "binomial" for binary).
+
+    -   Validate and prepare penalty type.
+
+    -   If parallel computation is requested, determine the number of cores.
+
+-   **Data Preprocessing**
+
+    -   Scale variables `X` and `M` if required.
+
+    -   Scale covariates `COV.XM` and `COV.MY` if present.
+
+-   **Determine Number of Mediators (`d`)**
+
+    -   If `topN` is not provided, calculate `d` based on data size.
+
+    -   Limit `d` to the number of available mediators.
+
+-   **Step 1: Sure Independent Screening**
+
+    -   If `Y.type` is "binary":
+
+        -   Perform screening to evaluate the association between `X` and each mediator `M`.
+
+    -   If `Y.type` is "continuous":
+
+        -   Perform screening to evaluate the association between each mediator `M` and `Y`.
+
+    -   Sort mediators by their p-values and select the top `d` mediators.
+
+-   **Step 2: Penalized Regression Estimation**
+
+    -   Construct the design matrix including selected mediators and `X`.
+
+    -   If `COV.MY` is provided, adjust for these covariates in the model.
+
+    -   Fit a penalized regression model using the specified penalty.
+
+    -   Select the optimal penalty parameter (`lambda`) based on BIC.
+
+-   **Identify Non-Zero Coefficients**
+
+    -   Extract mediators with non-zero estimates from the penalized regression.
+
+    -   If no mediators are significant, return `NULL`.
+
+    -   Otherwise, proceed to calculate the indirect effect.
+
+-   **Step 3: Joint Significance Test**
+
+    -   Estimate the effect of `X` on mediators (`alpha`) if `Y.type` is "continuous".
+
+    -   Calculate the mediation (indirect) effect for each mediator.
+
+    -   Perform significance testing for the indirect effect using the maximum p-value approach.
+
+    -   Apply the Bonferroni correction to identify significant mediators.
+
+-   **Output Results**
+
+    -   Return a data frame containing:
+
+        -   Mediator indices
+
+        -   Estimates of `alpha` and `beta`
+
+        -   Indirect effect size (`IDE`)
+
+        -   Relative importance (`rimp`)
+
+        -   Adjusted p-values
+
+-   **Completion**
+
+    -   Stop parallel computation and return the results.
+
+### dblassohima(X, M, Y, ...)
+
+-   **Initialization**
+
+    -   Get the number of samples `n` and the number of mediators `p`.
+
+    -   Scale the variables `X` and `M` if needed.
+
+    -   Scale the covariates `COV` if provided.
+
+-   **Prepare Design Matrices**
+
+    -   If `COV` is not provided, create matrices `MZX` and `XZ` using `M` and `X`.
+
+    -   If `COV` is provided, include `COV` in `MZX` and `XZ`.
+
+    -   Determine the number of covariates `q`.
+
+-   **Determine Number of Mediators (`d`)**
+
+    -   Calculate `d` based on the sample size if `topN` is not specified.
+
+    -   Limit `d` to the total number of mediators `p`.
+
+-   **Step 1: Sure Independent Screening (SIS)**
+
+    -   **Goal:** Identify the top mediators associated with exposure `X`.
+
+    -   For each mediator:
+
+        -   Estimate the regression coefficient `beta` for the mediator on `Y`.
+
+        -   Estimate the regression coefficient `alpha` for `X` on the mediator.
+
+    -   Calculate the product `alpha * beta` for each mediator.
+
+    -   Select the top `d` mediators with the largest absolute `alpha * beta` values.
+
+-   **Step 2: De-biased Lasso Estimation**
+
+    -   **Goal:** Refine the estimates using de-biased lasso.
+
+    -   If `COV` is provided, adjust for covariates in the lasso model.
+
+    -   Fit a de-biased lasso model to estimate regression coefficients `beta` for the selected mediators.
+
+    -   Compute standard errors and p-values for the `beta` estimates.
+
+-   **Estimate `alpha` Coefficients**
+
+    -   For each selected mediator:
+
+        -   Estimate the regression coefficient `alpha` for `X` on the mediator.
+
+        -   Compute the standard error and p-value for the `alpha` estimate.
+
+-   **Step 3: Multiple Testing Procedure**
+
+    -   **Goal:** Control the false discovery rate (FDR).
+
+    -   Combine p-values from the `alpha` and `beta` tests.
+
+    -   Estimate the null proportions for multiple testing.
+
+    -   Compute the FDR for each mediator and identify significant mediators using the `FDRcut` threshold.
+
+-   **Extract Significant Mediators**
+
+    -   If significant mediators are found:
+
+        -   Calculate the indirect effect (`IDE`) for each mediator.
+
+        -   Compute the relative importance of each mediator.
+
+        -   Create a data frame with the results.
+
+    -   If no significant mediators are identified, return `NULL`.
+
+-   **Output Results**
+
+    -   Return a data frame with:
+
+        -   Mediator indices
+
+        -   Estimates and standard errors for `alpha` and `beta`
+
+        -   Indirect effect size (`IDE`)
+
+        -   Relative importance
+
+        -   Adjusted p-values
+
+-   **Completion**
+
+    -   Print a message if verbose output is enabled.
+
+    -   Return the final results.
+
+### eHIMA(X, M, Y, ...)
+
+-   **Initialization**
+
+    -   Get the number of samples `n` and the number of mediators `p`.
+
+    -   Scale variables `X` and `M` if necessary.
+
+    -   Scale covariates `COV` if provided.
+
+    -   Construct design matrices:
+
+        -   If `COV` is not provided, combine `M` and `X`.
+
+        -   If `COV` is provided, combine `M`, `COV`, and `X`.
+
+-   **Determine Number of Mediators (`d`)**
+
+    -   Calculate `d` based on sample size if `topN` is not specified.
+
+    -   Ensure `d` does not exceed the total number of mediators `p`.
+
+-   **Step 1: Mediator Screening Using SIS + MCP**
+
+    -   **Goal:** Identify top mediators associated with exposure `X`.
+
+    -   For each mediator:
+
+        -   Fit a regression model to estimate the effect (`beta_SIS`) of the mediator on `Y`.
+
+        -   Fit a regression model to estimate the effect (`alpha_SIS`) of `X` on the mediator.
+
+    -   Calculate `ab_SIS = alpha_SIS * beta_SIS`.
+
+    -   Select the top `d` mediators with the largest absolute `ab_SIS` values.
+
+    -   Fit a penalized regression model using MCP to refine mediator selection.
+
+    -   Identify mediators with non-zero coefficients from the MCP model.
+
+-   **Step 2: Refitted Partial Regression**
+
+    -   **Goal:** Refine estimates for the selected mediators.
+
+    -   Fit a regression model using only the selected mediators and covariates.
+
+    -   Compute estimates, standard errors, and p-values for the `beta` coefficients.
+
+    -   Compute refined `alpha` estimates for the selected mediators.
+
+    -   For mediators not initially selected, perform an additional regression to estimate their effects.
+
+-   **Step 3: Divide-Aggregate Composite-Null Test (DACT)**
+
+    -   **Goal:** Test the significance of the mediation effect.
+
+    -   Apply the DACT procedure using the p-values from `alpha` and `beta` tests.
+
+    -   Use the Benjamini-Hochberg method to control the FDR.
+
+    -   Identify significant mediators.
+
+-   **Compute Indirect Effects**
+
+    -   Calculate the indirect effect (`IDE`) for each significant mediator.
+
+    -   Compute the relative importance of each mediator.
+
+-   **Output Results**
+
+    -   If significant mediators are found, return a data frame with:
+
+        -   Mediator indices
+
+        -   Estimates and standard errors for `alpha` and `beta`
+
+        -   Indirect effect size (`IDE`)
+
+        -   Relative importance
+
+        -   Adjusted p-values
+
+    -   If no significant mediators are found, return `NULL`.
+
+-   **Completion**
+
+    -   Print messages if `verbose` is enabled.
+
+    -   Return the final results.
+
+### microHIMA(X, M, Y, ...)
+
+-   **Preprocess Input Data:**
+
+    -   Convert `X` to a matrix with one column.
+
+    -   Convert `OTU` to a matrix `M_raw` of potential mediators.
+
+    -   Extract or assign mediator names to `M_ID_name`.
+
+    -   If `COV` is provided, convert it to a matrix and combine it with `X`.
+
+    -   Scale `X` and center `Y` around its mean.
+
+-   **Initialize Variables:**
+
+    -   Set `n` as the number of samples and `d` as the number of mediators.
+
+    -   Create matrices to store `alpha` and `beta` estimates, standard errors, and p-values.
+
+    -   Save the first column of `M_raw` as `M1` for swapping later.
+
+-   **Step 1: ILR Transformation and De-Biased Lasso Estimates**
+
+    -   **Loop Over Each Mediator (`k`):**
+
+        1.  **Rearrange Mediators:**
+
+            -   Swap the `k`-th mediator with the first mediator in `M`.
+
+        2.  **Perform ILR Transformation:**
+
+            -   For each sample:
+
+                -   Compute constants `C_1` and `C_2`.
+
+                -   Apply the isometric log-ratio transformation to generate the matrix `MT`.
+
+        3.  **Standardize `MT`:**
+
+            -   Scale the transformed matrix `MT`.
+
+        4.  **Create Design Matrix:**
+
+            -   Combine `MT` and `X` to form `MX`.
+
+        5.  **De-Biased Lasso Regression:**
+
+            -   Use `DLASSO_fun` to fit a de-biased lasso model on `MX` and `Y`.
+
+            -   Extract `beta` estimate, standard error, and compute the p-value.
+
+            -   Save `beta` estimate and standard error in matrices.
+
+        6.  **Linear Regression for `alpha`:**
+
+            -   Fit a linear regression model for the association between `X` and the first mediator in `MT`.
+
+            -   Extract `alpha` estimate, standard error, and compute the p-value.
+
+            -   Save `alpha` estimate, standard error, and the maximum p-value of `P_a` and `P_b`.
+
+-   **Step 2: Closed Testing-Based Procedure:**
+
+    -   **Adjust P-Values Using FDR:**
+
+        1.  Identify mediators with adjusted p-values less than `FDRcut`.
+
+        2.  Use the `hommel` package to perform a closed testing procedure to control FDR.
+
+        3.  Calculate the number of significant mediators incrementally.
+
+        4.  Identify mediators where the closed testing method indicates significance.
+
+-   **Compute Indirect Effects:**
+
+    -   Calculate the indirect effect (`IDE`) for each significant mediator as the product of `alpha` and `beta` estimates.
+
+-   **Prepare Output:**
+
+    -   If significant mediators are identified:
+
+        -   Create a data frame with:
+
+            -   Mediator indices
+
+            -   Estimates and standard errors for `alpha` and `beta`
+
+            -   Indirect effect size (`IDE`)
+
+            -   Relative importance (`rimp`)
+
+            -   Adjusted p-values (`pmax`)
+
+    -   If no mediators are significant, set the result to `NULL`.
+
+-   **Completion:**
+
+    -   If `verbose` is `TRUE`, print messages summarizing the results.
+
+    -   Return the final output.
+
+### qHIMA(X, M, Y, ...)
+
+-   **Setup and Initialization:**
+
+    -   Set the penalty type based on user input.
+
+    -   Get the number of samples `n` and number of mediators `p`.
+
+    -   Scale `X`, `M`, and `COV` (if provided) based on the `scale` flag.
+
+    -   Combine `X` with `COV` to create `XZ`.
+
+    -   Determine the number of mediators to select (`d`), based on `topN` or calculated value.
+
+    -   Initialize an empty `out_result` to store the final results.
+
+-   **Loop Over Each Quantile Level (`tau`):**
+
+    -   Print a message indicating the start of quantile regression for the given `tau`.
+
+-   **Step 1: Mediator Screening**
+
+    -   Loop over each mediator `k`:
+
+        -   Create a design matrix `MXZ_k` by combining the `k`-th mediator with `XZ`.
+
+        -   Fit a quantile regression model for `Y` on `MXZ_k` to estimate `beta_SIS_est`.
+
+        -   Fit an OLS regression model for `M[, k]` on `XZ` to estimate `alpha_est` and `alpha_SE`.
+
+    -   Compute a screening statistic `T_sobel`.
+
+    -   Identify the top `d` mediators with the largest absolute values of `T_sobel` (indices saved in `ID_SIS`).
+
+-   **Step 2: Penalized Quantile Regression**
+
+    -   Print a message indicating the start of penalized estimation.
+
+    -   Create a design matrix `MXZ_ID_SIS` using the selected mediators and `XZ`.
+
+    -   Fit a penalized quantile regression model using the specified penalty type.
+
+    -   Extract the estimated `beta` coefficients for the mediators.
+
+-   **Step 3: Mediator Significance Testing**
+
+    -   Identify the mediators with non-zero coefficients from the penalized model (`ID_penalty`).
+
+    -   Fit a quantile regression model for `Y` using the selected mediators and `XZ`.
+
+    -   Compute estimates, standard errors, and p-values for the `beta` coefficients.
+
+    -   Compute p-values for `alpha` and `beta` coefficients and combine them using the `Pmax` method.
+
+    -   Adjust p-values using the Bonferroni correction.
+
+-   **Identify Significant Mediators:**
+
+    -   Identify mediators with adjusted p-values less than `Bonfcut`.
+
+    -   Compute the indirect effect (`IDE`) as the product of `alpha` and `beta` estimates.
+
+    -   If significant mediators are found, add their details to `out_result`.
+
+-   **Output Results:**
+
+    -   Print messages indicating the number of significant mediators (if `verbose` is `TRUE`).
+
+    -   Return the `out_result` data frame with significant mediators and their statistics.
+
+    -   The function returns a data frame with:
+
+        -   Mediator indices
+
+        -   Estimates and standard errors for `alpha` and `beta`
+
+        -   Indirect effect size (`IDE`)
+
+        -   Relative importance (`rimp`)
+
+        -   Adjusted p-values (`pmax`)
+
+        -   Quantile level (`tau`) used in the regression
+
+### survHIMA(X, M, Y, ...)
+
+-   **Preprocess Input Data:**
+
+    -   Convert `X` to a matrix with one column.
+
+    -   Convert `M` to a matrix and extract or assign mediator names (`M_ID_name`).
+
+    -   Set `n` as the number of samples and `p` as the number of mediators.
+
+    -   If `COV` is provided, convert it to a matrix and combine it with `M` and `X` to create `MZ`.
+
+    -   Scale `MZ` if `scale` is `TRUE`.
+
+-   **Step 1: Sure Independent Screening (SIS)**
+
+    -   Print a message indicating the start of SIS.
+
+    -   Determine the number of mediators to select (`d_0`), based on `topN` or a calculated value.
+
+    -   **Loop Over Each Mediator `i`:**
+
+        -   Create a design matrix `MZ_SIS` that includes the `i`-th mediator and covariates.
+
+        -   Fit a Cox proportional hazards model using `MZ_SIS` to estimate `beta_SIS`.
+
+    -   **Loop Over Each Mediator `i` Again:**
+
+        -   Fit an OLS regression model to estimate `alpha_SIS` for the effect of `X` on the `i`-th mediator.
+
+    -   Compute a screening statistic `ab_SIS` and select the top `d` mediators.
+
+-   **Step 2: De-Biased Lasso Estimates**
+
+    -   Print a message indicating the start of de-biased lasso estimation.
+
+    -   **Loop Over Each Selected Mediator `i`:**
+
+        -   Create a modified design matrix `V` and use a de-biased lasso procedure (`LDPE_func`) to estimate `beta` and standard errors.
+
+        -   Compute the p-values for the `beta` estimates and store the results.
+
+    -   **Loop Over Each Selected Mediator `i` Again:**
+
+        -   Fit an OLS regression model to estimate `alpha_SIS` and compute standard errors and p-values.
+
+-   **Step 3: Multiple-Testing Procedure**
+
+    -   Print a message indicating the start of the multiple-testing procedure.
+
+    -   Combine `alpha` and `beta` p-values and compute joint p-values using the maximum method.
+
+    -   **Adjust for Multiple Testing:**
+
+        -   Add a small random value to p-values to avoid ties.
+
+        -   Estimate null proportions and calculate FDR-adjusted p-values using the `HDMT` package.
+
+    -   Identify mediators with FDR-adjusted p-values below `FDRcut`.
+
+-   **Compute Indirect Effects:**
+
+    -   Calculate the indirect effect (`IDE`) for each significant mediator as the product of `alpha` and `beta` estimates.
+
+-   **Prepare Output:**
+
+    -   If significant mediators are identified:
+
+        -   Create a data frame with:
+
+            -   Mediator indices
+
+            -   Estimates and standard errors for `alpha` and `beta`
+
+            -   Indirect effect size (`IDE`)
+
+            -   Relative importance (`rimp`)
+
+            -   Adjusted p-values (`pmax`)
+
+    -   If no significant mediators are found, set the result to `NULL`.
+
+-   **Completion:**
+
+    -   Print messages summarizing the results if `verbose` is `TRUE`.
+
+    -   Return the final output.
+
+    -   The function returns a data frame with:
+
+        -   Mediator indices
+
+        -   Estimates and standard errors for `alpha` and `beta`
+
+        -   Indirect effect size (`IDE`)
+
+        -   Relative importance (`rimp`)
+
+        -   Adjusted p-values (`pmax`)
+
+## Load Libraries
+
+```{r libraries}
+# Load necessary libraries
+library(ggplot2)
+library(HIMA)
+library(survival)
+library(FSA)
+library(broom)
+library(boot)
+library(reshape2)
+source("functions.pck")
+```
+
+## Load Data
+
+```{r load-data}
+# Load your dataset
+# Example: data <- read.csv("path_to_your_dataset.csv")
+set.seed(123)
+data(himaDat)
+Example1 <- himaDat$Example1
+Example2 <- himaDat$Example2
+Example3 <- himaDat$Example3
+Example4 <- himaDat$Example4
+Example5 <- himaDat$Example5
+```
+
+## Example 1 Data Overview
+
+### Dimensions of the Data
+
+```{r}
+dim(Example1$PhenoData)
+dim(Example1$Mediator)
+```
+
+### Data Overview
+
+Numerical Features
+
+```{r}
+# Histograms for numerical features
+num_vars <- sapply(Example1$PhenoData, is.numeric)
+data_numeric <- Example1$PhenoData[, num_vars]
+lapply(names(data_numeric), function(var) {
+  print(ggplot(Example1$PhenoData, aes_string(x = var)) + 
+        geom_histogram(binwidth = 1, fill = "blue", color = "black", alpha = 0.7) +
+        labs(title = paste("Distribution of", var)))
+})
+summary(Example1$PhenoData)
+```
+
+**Treatment**: A binary feature that indicates the presence of the treatment for a test subject. **1** indicated the presence of the treatment. **0** indicates the absence of the treatment.
+
+**Outcome**: A continuous numerical feature with unknown units of measurement.
+
+**Sex**: A binary feature that indicates the biological sex of the subject. **1** indicates females, and **0** indicates males.
+
+**Age**: A continuous numerical features that represents the age of the subject in years.
+
+Categorical Features
+
+```{r}
+# Bar plots for categorical features
+cat_vars <- sapply(Example1$PhenoData, is.factor)
+data_categorical <- Example1$PhenoData[, cat_vars, drop = FALSE]
+lapply(names(data_categorical), function(var) {
+  print(ggplot(Example1$PhenoData, aes_string(x = var)) + 
+        geom_bar(fill = "blue", color = "black", alpha = 0.7) +
+        labs(title = paste("Frequency of", var)))
+})
+```
+
+### Example 1 Prediction Model
+
+```{r}
+Example1pl <- plot_examples(data = himaDat$Example1$PhenoData,
+                                                   plotname = "Example One Full Model Outcome Predictions")
+Example1pl
+```
+
+Clearly, the presence of treatment in conjunction with covariates do not accurately describe the relationship treatment has towards the outcome in Example 1. Mediation analysis is necessary to correct this.
+
+### Mediation Analysis with classicHIMA
+
+#### Mediator Identification
+
+```{r}
+hima.fit <- classicHIMA(
+  X = himaDat$Example1$PhenoData$Treatment,
+  Y = himaDat$Example1$PhenoData$Outcome,
+  M = himaDat$Example1$Mediator,
+  COV.XM = himaDat$Example1$PhenoData[, c("Sex", "Age")],
+  Y.type = "continuous",
+  scale = FALSE, # Disabled only for simulation data
+  verbose = TRUE
+)
+hima.fit
+summary(Example1$Mediator[,hima.fit[,"Index"]])
+```
+
+M1, M2, and M3 have been identified as the top three most significant mediator variables. (p \< 0.05)
+
+**alpha_hat** represents the effect the treatment has on the mediators.
+
+**beta_hat** represents the effect the mediators have towards the outcome.
+
+**IDE** stands for "Indirect Effect", and is the result of **alpha_hat\*beta_hat**.
+
+**rimp** stands for "Relative Importance" and represents the average percent contribution a mediator has towards the net Indirect Effect.
+
+```{r warning=FALSE}
+E1classic <- estimatedEffects()
+Example1classicmodelpl <- plot_mediator_adjustments(actual = himaDat$Example1$PhenoData$Outcome,
+                                        estimations = E1classic,
+                                        mediator_indices = hima.fit[,"Index"],
+                                        plotname = "Example One Classic HIMA Outcome Predictions")
+Example1classicmodelpl
+```
+
+The consideration of mediators allows the relationship between Treatment and Outcome to be much more accurately described.
+
+The contribution towards the outcome by each mediator is calculated as **M \* beta_hat.**
+
+The contribution towards the outcome by the Direct Effect is calculated as the **E(Y \| X, Cov) - IDE**.
+
+The mediator adjusted prediction is **E(Y \| X, M, Cov) = 𝛽\*M + E(Y \| X, Cov) - IDE**.
+
+#### Effect Analysis
+
+##### Test for Normality
+
+*H~0~* : The values for every type of measured effect are drawn from the normal distribution.
+
+*H~1~* : The values for every type of measured effect are drawn from outside the normal distribution.
+
+```{r}
+E1_classic_control_ks_results <- kstests(dat = E1classic[E1classic$Treatment == 0,], exclude = c("Treatment","Sex","Other", "DominantEffect", "Direct"))
+print(data.frame(E1_classic_control_ks_results))
+E1_classic_experimental_ks_results <- kstests(dat = E1classic[E1classic$Treatment != 0,], exclude = c("Treatment","Sex","Other", "DominantEffect", "Direct"))
+print(data.frame(E1_classic_experimental_ks_results))
+```
+
+##### Tests for Correlation
+
+We reject *H~0~* (p \< 0.05). In rejection of the null hypothesis, we shall test for whether there exists correlations between each mediator effect.
+
+*H~0~* : There exists no correlation between a mediator effect and any other mediator effect.
+
+*H~1~* : There exists a correlation between an effect and any other mediator effect.
+
+```{r}
+E1classic_effect_cor <- perform_cor_tests(E1classic, c(hima.fit[,"Index"]), alternative = "two.sided", method = "spearman")
+E1classic_effect_cor
+```
+
+We cannot reject the null hypothesis(adjusted p \> 0.05). We will follow up on this by testing for the correlation between each effect for the experimental group. where the direct effect is always present.
+
+*H~0~* : There exists no correlation between an effect and any other effect in the experimental group.
+
+*H~1~* : There exists a correlation between an effect and any other effect in the experimental group.
+
+```{r}
+E1classic_effect_cor_e <- perform_cor_tests(E1classic[E1classic$Treatment > 0,], c(hima.fit[,"Index"], "Direct"), alternative = "two.sided", method = "spearman")
+E1classic_effect_cor_e
+```
+
+We reject the null hypothesis: There exists positive correlation between M2 and the Direct Effect (adjusted p \< 0.05). There exists negative correlation between M3 and the Direct Effect. For the relationships between each mediator effect, the null hypothesis cannot be rejected. We will conduct bootstrap sampling to find the true mean of each effect in the control group and experimental group.
+
+```{r}
+E1classic_control_long <- melt(E1classic[E1classic$Treatment == 0,hima.fit[,"Index"]], variable.name = "Effect", value.name = "Contribution")
+head(E1classic_control_long)
+E1_classic_control_pl <- plot_violins(E1classic_control_long, x = "Effect", y = "Contribution", "Example 1 Classic HIMA Control Group Effects")
+E1classic_control_boot <- boot_tests(data = E1classic_control_long, x = "Effect", y = "Contribution", statistic = mean)
+E1classic_control_boot
+```
+
+```{r}
+E1classic_experimental_long <- melt(E1classic[E1classic$Treatment != 0,c(hima.fit[,"Index"], "Direct")], variable.name = "Effect", value.name = "Contribution")
+head(E1classic_experimental_long)
+E1classic_experimental_pl <- plot_violins(E1classic_experimental_long, x = "Effect", y = "Contribution", "Example 1 Classic HIMA Experimental Group Effects")
+E1classic_experimental_boot <- boot_tests(data = E1classic_experimental_long, x = "Effect", y = "Contribution", statistic = mean)
+E1classic_experimental_boot
+```
+
+In the experimental group, the mean contributions of each effect are much higher than they are in the control group.
+
+We are going to test for correlations between effects and the measured outcome and residuals of the mediator adjusted prediction to the measured outcome.
+
+*H~0~* : There exists no correlation between any effect and measured outcome in the experimental group.
+
+*H~1~* : There exists a correlation between any effect and measured outcome in the experimental group.
+
+```{r}
+E1classic_effect_outcome_cor <- perform_cor_tests(E1classic, x = c(hima.fit[,"Index"], "Direct", "Residuals"), y = "Outcome", alternative = "two.sided", method = "spearman")
+E1classic_effect_outcome_cor
+```
+
+We can reject the null hypothesis(adjusted p \< 0.05). For all effects, there exists positive correlation to the outcome. The residuals of the model do not show strong correlation with the Outcome, indicating that it is unlikely for magnitude of outcome to be a limiting factor in the accuracy of effect contributions. We will move on to testing the correlation the effects and residuals have to the Age of the subjects.
+
+*H~0~* : There exists no correlation between any effect and age in the experimental group.
+
+*H~1~* : There exists a correlation between any effect and age in the experimental group.
+
+```{r}
+E1classic_effect_age_cor <- perform_cor_tests(E1classic, x = c(hima.fit[,"Index"], "Direct", "Residuals"), y = "Age", alternative = "two.sided", method = "spearman")
+E1classic_effect_age_cor
+```
+
+We can reject the null hypothesis(adjusted p \< 0.05). M2 and the direct effect have positive correlation to the age. These results suggest that age of the subject affects their sensitivity to the effects of each mediator. The correlation between Age and the residuals of the mediator adjusted model do not have statistical significance, suggesting that the age of the subject does not strongly influence the model's inaccuracies.
+
+##### Test for differences across groups
+
+We are going to use the Kruskal-Wallis test to determine the difference in variance for effects, residuals, and the outcome across sexes.
+
+*H~0~* : There exists no difference in medians in any effects and the outcome across male and female subjects.
+
+*H~1~* : There exists a difference in medians in any effects and the outcome across male and female subjects.\
+
+```{r}
+E1classic_kruskal_sex <- perform_kruskal(E1classic, "Sex", c(hima.fit[,"Index"], "Direct", "Outcome", "Residuals"))
+E1classic_kruskal_sex
+```
+
+The null hypothesis cannot be rejected(adjusted p \> 0.05). The difference in variance in residuals in male subjects and female subjects is statistically insignificant, suggesting that the sex of the patient is not a limiting factor in the accuracy of the model.
+
+```{r}
+E1classic$Sex <- ifelse(E1classic$Sex == 0, "Male", "Female")
+E1classic_sex_pl <- plot_violins(E1classic, "Sex", "Direct", plotname = "Example 1 Classic HIMA Direct ~ Sex Violin Plot")
+E1classic_sex_pl
+boot_tests(E1classic, "Sex", "Direct", mean)
+```
+
+##### Findings
+
+The results of **classicHIMA** for Example 1 show:
+
+The values for each effect are not normally distributed.
+
+M2 has positive correlation with the direct effect. M3 has negative correlation with the direct effect.
+
+All effects have a positive correlation with the outcome.
+
+The direct effect and M2 have positive correlation with age.
+
+The residuals cannot be attributed to the input data as a limiting factor.
+
+### Mediation Analysis with dblassoHIMA
+
+#### Mediator Identification
+
+```{r}
+dblassohima.fit <- dblassoHIMA(
+  X = himaDat$Example1$PhenoData$Treatment,
+  Y = himaDat$Example1$PhenoData$Outcome,
+  M = himaDat$Example1$Mediator,
+  COV = himaDat$Example1$PhenoData[, c("Sex", "Age")],
+  scale = FALSE, # Disabled only for simulation data
+  FDRcut = 0.05,
+  verbose = TRUE
+)
+dblassohima.fit
+E1dblasso <- estimatedEffects(fit = dblassohima.fit)
+summary(Example1$Mediator[,dblassohima.fit[,"Index"]])
+```
+
+**dblassoHIMA** differs from **classicHIMA** in that it repeatedly refines it's estimates with debiased lasso, leading to a slow runtime.
+
+M1, M2, and M3 have been identified as the top three most significant mediator variables. (p \< 0.05)
+
+**alpha_hat** represents the effect the treatment has on the mediators.
+
+**beta_hat** represents the effect the mediators have towards the outcome.
+
+**alpha_se** is the standard error for **E(M \| X, Cov).**
+
+**beta_se** is the standard error for **E(Y \| M, Cov).**
+
+**IDE** stands for "Indirect Effect", and is the result of **alpha_hat\*beta_hat**.
+
+```{r}
+E1dblasso <- estimatedEffects(fit = dblassohima.fit)
+E1dblassopl <- plot_mediator_adjustments(actual = himaDat$Example1$PhenoData$Outcome,
+                             estimations = E1dblasso,
+                             mediator_indices = dblassohima.fit[,"Index"],
+                             plotname = "Example One Debiased Lasso Penalty HIMA Outcome Predictions")
+E1dblassopl
+```
+
+The consideration of mediators allows the relationship between Treatment and Outcome to be much more accurately described.
+
+The contribution towards the outcome by each mediator is calculated as **M \* beta_hat.**
+
+The contribution towards the outcome by the Direct Effect is calculated as the **E(Y \| X, Cov) - IDE**.
+
+The mediator adjusted prediction is **E(Y \| X, M, Cov) = 𝛽\*M + E(Y \| X, Cov) - IDE**.
+
+#### Effect Analysis
+
+##### Test for Normality
+
+*H~0~* : The values for every type of measured effect are drawn from the normal distribution.
+
+*H~1~* : The values for every type of measured effect are drawn from outside the normal distribution.
+
+```{r}
+E1dblasso_control_ks_results <- kstests(dat = E1dblasso[E1dblasso$Treatment == 0,], exclude = c("Treatment","Sex","Other", "DominantEffect", "Direct"))
+print(data.frame(E1dblasso_control_ks_results))
+E1dblasso_experimental_ks_results <- kstests(dat = E1dblasso[E1dblasso$Treatment != 0,], exclude = c("Treatment","Sex","Other", "DominantEffect", "Direct"))
+print(data.frame(E1dblasso_experimental_ks_results))
+```
+
+##### Tests for Correlation
+
+We reject *H~0~* (p \< 0.05). In rejection of the null hypothesis, we shall test for correlations between each mediator effect.
+
+*H~0~* : There exists no correlation between a mediator effect and any other mediator effect.
+
+*H~1~* : There exists a correlation between an effect and any other mediator effect.
+
+```{r}
+E1dblasso_effect_cor <- perform_cor_tests(E1dblasso, c(dblassohima.fit[,"Index"]), alternative = "two.sided", method = "spearman")
+E1dblasso_effect_cor
+```
+
+We cannot reject the null hypothesis(adjusted p \> 0.05). We will follow up on this by testing for the correlation between each effect for the experimental group, where the direct effect is always present.
+
+*H~0~* : There exists no correlation between an effect and any other effect in the experimental group.
+
+*H~1~* : There exists a correlation between an effect and any other effect in the experimental group.
+
+```{r}
+E1dblasso_effect_cor_e <- perform_cor_tests(E1dblasso[E1dblasso$Treatment > 0,], c(dblassohima.fit[,"Index"], "Direct"), alternative = "two.sided", method = "spearman")
+E1dblasso_effect_cor_e
+```
+
+We reject the null hypothesis: There exists positive correlation between M2 and the Direct Effect (adjusted p \< 0.05). There exists negative correlation between M3 and the Direct Effect(adjusted p \< 0.05). For the relationships between each mediator effect, the null hypothesis cannot be rejected. We will conduct bootstrap sampling to find the true mean of each effect in the control group and experimental group.
+
+```{r}
+E1dblasso_control_long <- melt(E1dblasso[E1dblasso$Treatment == 0,hima.fit[,"Index"]], variable.name = "Effect", value.name = "Contribution")
+head(E1dblasso_control_long)
+E1dblasso_control_pl <- plot_violins(E1dblasso_control_long, x = "Effect", y = "Contribution", "Example 1 Debiased Lasso HIMA Control Group Effects")
+E1dblasso_control_boot <- boot_tests(data = E1dblasso_control_long, x = "Effect", y = "Contribution", statistic = mean)
+E1dblasso_control_boot
+```
+
+```{r}
+E1dblasso_experimental_long <- melt(E1dblasso[E1dblasso$Treatment != 0,c(dblassohima.fit[,"Index"], "Direct")], variable.name = "Effect", value.name = "Contribution")
+head(E1dblasso_experimental_long)
+E1dblasso_experimental_pl <- plot_violins(E1dblasso_experimental_long, x = "Effect", y = "Contribution", "Example 1 Debiased Lasso HIMA Experimental Group Effects")
+E1dblasso_experimental_boot <- boot_tests(data = E1dblasso_experimental_long, x = "Effect", y = "Contribution", statistic = mean)
+E1dblasso_experimental_boot
+E1dblasso_experimental_pl
+```
+
+In the experimental group, the mean contributions of each effect are much higher than they are in the control group.
+
+We are going to test for correlations between effects and the measured outcome and residuals of the mediator adjusted prediction to the measured outcome.
+
+*H~0~* : There exists no correlation between any effect and measured outcome in the experimental group.
+
+*H~1~* : There exists a correlation between any effect and measured outcome in the experimental group.
+
+```{r}
+E1dblasso_effect_outcome_cor <- perform_cor_tests(E1dblasso, x = c(dblassohima.fit[,"Index"], "Direct", "Residuals"), y = "Outcome", alternative = "two.sided", method = "spearman")
+E1dblasso_effect_outcome_cor
+```
+
+We can reject the null hypothesis(adjusted p \< 0.05). For all effects, there exists positive correlation to the outcome. The residuals of the model do not show strong correlation with the Outcome, indicating that it is unlikely for magnitude of outcome to be a limiting factor in the accuracy of effect contributions. We will move on to testing the correlation the effects and residuals have to the Age of the subjects.
+
+*H~0~* : There exists no correlation between any effect and age in the experimental group.
+
+*H~1~* : There exists a correlation between any effect and age in the experimental group.
+
+```{r}
+E1dblasso_effect_age_cor <- perform_cor_tests(E1dblasso, x = c(dblassohima.fit[,"Index"], "Direct", "Residuals"), y = "Age", alternative = "two.sided", method = "spearman")
+E1dblasso_effect_age_cor
+```
+
+We can reject the null hypothesis(p \< 0.05). For all effects, there is statistical significance to age. M2 and the direct effect have positive correlation with age. These results suggest that age of the subject affects their sensitivity to the effects of each mediator. The correlation between Age and the residuals of the mediator adjusted model do not have statistical significance, suggesting that the age of the subject does not strongly influence the model's inaccuracies.
+
+##### Test for differences across groups
+
+We are going to use the Kruskal-Wallis test to determine the difference in variance for effects, residuals, and the outcome across sexes.
+
+*H~0~* : There exists no difference in medians in any effects and the outcome across male and female subjects.
+
+*H~1~* : There exists a difference in medians in any effects and the outcome across male and female subjects.\
+
+```{r}
+E1dblasso_kruskal_sex <- perform_kruskal(E1dblasso, "Sex", c(dblassohima.fit[,"Index"], "Direct", "Outcome", "Residuals"))
+E1dblasso_kruskal_sex
+```
+
+The null hypothesis cannot be rejected(adjusted p \> 0.05). The difference in medians in residuals in male subjects and female subjects is statistically insignificant, suggesting that the sex of the patient is not a limiting factor in the accuracy of the model.
+
+```{r}
+E1dblasso$Sex <- ifelse(E1dblasso$Sex == 0, "Male", "Female")
+E1dblasso_sex_pl <- plot_violins(E1dblasso, "Sex", "Direct", plotname = "Example 1 Debiased Lasso HIMA Direct ~ Sex Violin Plot")
+E1dblasso_sex_pl
+boot_tests(E1dblasso, "Direct", "M3", mean)
+```
+
+##### Findings
+
+The results of **dblassoHIMA** for Example 1 show:
+
+The values for each effect are not normally distributed.
+
+M2 has positive correlation with the direct effect. M3 has negative correlation with the direct effect.
+
+All effects have a positive correlation with the outcome.
+
+The direct effect and M2 have positive correlation with age.
+
+The residuals cannot be attributed to the input data as a limiting factor.
+
+### Mediation Analysis with Multiple Comparison Procedure HIMA
+
+#### Mediator Identification
+
+```{r}
+e1 <- himaFit(Outcome ~ Treatment + Sex + Age,
+              data.pheno = himaDat$Example1$PhenoData,
+              data.M = himaDat$Example1$Mediator,
+              mediator.type = "gaussian",
+              penalty = "MCP", # Can be "DBlasso" for dblassoHIMA
+              scale = FALSE
+) # Disabled only for simulation data
+e1
+summary(Example1$Mediator[,e1[,"ID"]])
+## End(Not run)
+```
+
+M1, M2, and M3 have been identified as the top three most significant mediator variables. (p \< 0.05)
+
+**alpha_hat** represents the effect the treatment has on the mediators.
+
+**beta_hat** represents the effect the mediators have towards the outcome.
+
+**alpha_se** is the standard error for **E(M \| X, Cov).**
+
+**beta_se** is the standard error for **E(Y \| M, Cov).**
+
+**IDE** stands for "Indirect Effect", and is the result of **alpha_hat\*beta_hat**.
+
+```{r}
+E1mcp <- estimatedEffects(fit = e1, IDEcoefs = e1[,"alpha*beta"], betas = e1[,"beta"])
+E1mcppl <- plot_mediator_adjustments(actual = himaDat$Example1$PhenoData$Outcome,
+                                        estimations = E1mcp,
+                                        mediator_indices = e1[,"ID"],
+                                        plotname = "Example One MCP HIMA Outcome Predictions")
+E1mcppl
+```
+
+The consideration of mediators allows the relationship between Treatment and Outcome to be much more accurately described.
+
+The contribution towards the outcome by each mediator is calculated as **M \* beta_hat.**
+
+The contribution towards the outcome by the Direct Effect is calculated as the **E(Y \| X, Cov) - IDE**.
+
+The mediator adjusted prediction is **E(Y \| X, M, Cov) = 𝛽\*M + E(Y \| X, Cov) - IDE**.
+
+#### Effect Analysis
+
+##### Test for Normality
+
+*H~0~* : The values for every type of measured effect are drawn from the normal distribution.
+
+*H~1~* : The values for every type of measured effect are drawn from outside the normal distribution.
+
+```{r}
+E1mcp_control_ks_results <- kstests(dat = E1mcp[E1mcp$Treatment == 0,], exclude = c("Treatment","Sex","Other", "DominantEffect", "Direct"))
+print(data.frame(E1mcp_control_ks_results))
+E1mcp_experimental_ks_results <- kstests(dat = E1mcp[E1mcp$Treatment != 0,], exclude = c("Treatment","Sex","Other", "DominantEffect", "Direct"))
+print(data.frame(E1mcp_experimental_ks_results))
+```
+
+##### Tests for Correlation
+
+We reject *H~0~* (p \< 0.05). In rejection of the null hypothesis, we shall test for test for whether there exists correlations between each mediator effect.
+
+*H~0~* : There exists no correlation between a mediator effect and any other mediator effect.
+
+*H~1~* : There exists a correlation between an effect and any other mediator effect.
+
+```{r}
+E1mcp_effect_cor <- perform_cor_tests(E1mcp, c(e1[,"ID"]), alternative = "two.sided", method = "spearman")
+E1mcp_effect_cor
+```
+
+We cannot reject the null hypothesis(adjusted p \> 0.05). We will follow up on this by testing for the correlation between each effect for the experimental group, where the direct effect is always present.
+
+*H~0~* : There exists no correlation between an effect and any other effect in the experimental group.
+
+*H~1~* : There exists a correlation between an effect and any other effect in the experimental group.
+
+```{r}
+E1mcp_effect_cor_e <- perform_cor_tests(E1mcp[E1mcp$Treatment != 0,], c(e1[,"ID"], "Direct"), alternative = "two.sided", method = "spearman")
+E1mcp_effect_cor_e
+```
+
+We reject the null hypothesis: There exists positive correlation between M2 and the Direct Effect (adjusted p \< 0.05). There exists negative correlation between M3 and the Direct Effect(adjusted p \< 0.05). For the relationships between each mediator effect, the null hypothesis cannot be rejected. We will conduct bootstrap sampling to find the true mean of each effect in the control group and experimental group.
+
+```{r}
+E1mcp_control_long <- melt(E1mcp[E1mcp$Treatment == 0,e1[,"ID"]], variable.name = "Effect", value.name = "Contribution")
+head(E1mcp_control_long)
+E1mcp_control_pl <- plot_violins(E1mcp_control_long, x = "Effect", y = "Contribution", "Example 1 MCP HIMA Control Group Effects")
+E1mcp_control_boot <- boot_tests(data = E1mcp_control_long, x = "Effect", y = "Contribution", statistic = mean)
+E1mcp_control_boot
+```
+
+```{r}
+E1mcp_experimental_long <- melt(E1mcp[E1mcp$Treatment != 0,c(e1[,"ID"], "Direct")], variable.name = "Effect", value.name = "Contribution")
+head(E1mcp_experimental_long)
+E1mcp_experimental_pl <- plot_violins(E1mcp_experimental_long, x = "Effect", y = "Contribution", "Example 1 MCP HIMA Experimental Group Effects")
+E1mcp_experimental_boot <- boot_tests(data = E1mcp_experimental_long, x = "Effect", y = "Contribution", statistic = mean)
+E1mcp_experimental_boot
+```
+
+In the experimental group, the mean contributions of each effect are much higher than they are in the control group.
+
+We are going to test for correlations between effects and the measured outcome and residuals of the mediator adjusted prediction to the measured outcome.
+
+*H~0~* : There exists no correlation between any effect and measured outcome in the experimental group.
+
+*H~1~* : There exists a correlation between any effect and measured outcome in the experimental group.
+
+```{r}
+E1mcp_effect_outcome_cor <- perform_cor_tests(E1mcp, x = c(e1[,"ID"], "Direct", "Residuals"), y = "Outcome", alternative = "two.sided", method = "spearman")
+E1mcp_effect_outcome_cor
+```
+
+We can reject the null hypothesis(p \< 0.05). For all effects, there exists positive correlation to the outcome. The residuals of the model do not show strong correlation with the Outcome, indicating that it is unlikely for magnitude of outcome to be a limiting factor in the accuracy of effect contributions. We will move on to testing the correlation the effects and residuals have to the Age of the subjects.
+
+*H~0~* : There exists no correlation between any effect and age in the experimental group.
+
+*H~1~* : There exists a correlation between any effect and age in the experimental group.
+
+```{r}
+E1mcp_effect_age_cor <- perform_cor_tests(E1mcp, x = c(e1[,"ID"], "Direct", "Residuals"), y = "Age", alternative = "two.sided", method = "spearman")
+E1mcp_effect_age_cor
+```
+
+We can reject the null hypothesis(p \< 0.05). M2, and the direct effect have positive correlation with age. These results suggest that age of the subject affects their sensitivity to the effects of each mediator. The correlation between Age and the residuals of the mediator adjusted model do not have statistical significance, suggesting that the age of the subject does not strongly influence the model's inaccuracies.
+
+##### Test for differences across groups
+
+We are going to use the Kruskal-Wallis test to determine the difference in variance for effects, residuals, and the outcome across sexes.
+
+*H~0~* : There exists no difference in medians in any effects and the outcome across male and female subjects.
+
+*H~1~* : There exists a difference in medians in any effects and the outcome across male and female subjects.\
+
+```{r}
+E1mcp_kruskal_sex <- perform_kruskal(E1mcp, "Sex", c(e1[,"ID"], "Direct", "Outcome", "Residuals"))
+E1mcp_kruskal_sex
+```
+
+The null hypothesis cannot be rejected(adjusted p \< 0.05). The difference in variance in residuals in male subjects and female subjects is statistically insignificant, suggesting that the sex of the patient is not a limiting factor in the accuracy of the model.
+
+```{r}
+E1mcp$Sex <- ifelse(E1mcp$Sex == 0, "Male", "Female")
+E1mcp_sex_pl <- plot_violins(E1mcp, "Sex", "M3", plotname = "Example 1 MCP HIMA M3 ~ Sex Violin Plot")
+E1mcp_sex_pl
+boot_tests(E1mcp, "Sex", "M3", mean)
+```
+
+##### Findings
+
+The results of **MCP HIMA** for Example 1 show:
+
+The values for each effect are not normally distributed.
+
+M2 has positive correlation with the direct effect. M3 has negative correlation with the direct effect.
+
+All effects have a positive correlation with the outcome.
+
+The direct effect and M2 have positive correlation with age.
+
+The residuals cannot be attributed to the input data as a limiting factor.
+
+### Mediation Analysis with eHIMA
+
+#### Mediator Identification
+
+```{r}
+head(himaDat$Example1$PhenoData)
+eHIMA.fit <- eHIMA(
+  X = himaDat$Example1$PhenoData$Treatment,
+  Y = himaDat$Example1$PhenoData$Outcome,
+  M = himaDat$Example1$Mediator,
+  COV = himaDat$Example1$PhenoData[, c("Sex", "Age")],
+  scale = FALSE, # Disabled only for simulation data
+  FDRcut = 0.05,
+  verbose = TRUE
+)
+eHIMA.fit
+summary(Example1$Mediator[,eHIMA.fit[,"Index"]])
+## End(Not run)
+```
+
+M1, M2, and M3 have been identified as the top three most significant mediator variables. (p \< 0.05)
+
+**alpha_hat** represents the effect the treatment has on the mediators.
+
+**beta_hat** represents the effect the mediators have towards the outcome.
+
+**alpha_se** is the standard error for **E(M \| X, Cov).**
+
+**beta_se** is the standard error for **E(Y \| M, Cov).**
+
+**IDE** stands for "Indirect Effect", and is the result of **alpha_hat\*beta_hat**.
+
+```{r}
+E1efficient <- estimatedEffects(fit = eHIMA.fit)
+E1efficientpl <- plot_mediator_adjustments(actual = himaDat$Example1$PhenoData$Outcome,
+                             estimations = E1efficient,
+                             mediator_indices = eHIMA.fit[,"Index"],
+                             plotname = "Example One Efficient HIMA Outcome Predictions")
+E1efficientpl
+
+```
+
+The consideration of mediators allows the relationship between Treatment and Outcome to be much more accurately described.
+
+The contribution towards the outcome by each mediator is calculated as **M \* beta_hat.**
+
+The contribution towards the outcome by the Direct Effect is calculated as the **E(Y \| X, Cov) - IDE**.
+
+The mediator adjusted prediction is **E(Y \| X, M, Cov) = 𝛽\*M + E(Y \| X, Cov) - IDE**.
+
+#### Effect Analysis
+
+##### Test for Normality
+
+*H~0~* : The values for every type of measured effect are drawn from the normal distribution.
+
+*H~1~* : The values for every type of measured effect are drawn from outside the normal distribution.
+
+```{r}
+E1efficient_control_ks_results <- kstests(dat = E1efficient[E1efficient$Treatment == 0,], exclude = c("Treatment","Sex","Other", "DominantEffect", "Direct"))
+print(data.frame(E1efficient_control_ks_results))
+E1efficient_experimental_ks_results <- kstests(dat = E1efficient[E1efficient$Treatment != 0,], exclude = c("Treatment","Sex","Other", "DominantEffect", "Direct"))
+print(data.frame(E1efficient_experimental_ks_results))
+```
+
+##### Tests for Correlation
+
+We reject *H~0~* (p \< 0.05). In rejection of the null hypothesis, we shall test for test for whether there exists correlations between each mediator effect.
+
+*H~0~* : There exists no correlation between a mediator effect and any other mediator effect.
+
+*H~1~* : There exists a correlation between an effect and any other mediator effect.
+
+```{r}
+E1efficient_effect_cor <- perform_cor_tests(E1efficient, c(eHIMA.fit[,"Index"]), alternative = "two.sided", method = "spearman")
+E1efficient_effect_cor
+```
+
+We cannot reject the null hypothesis(adjusted p \> 0.05). We will follow up on this by testing for the correlation between each effect for the experimental group, where the direct effect is always present.
+
+*H~0~* : There exists no correlation between an effect and any other effect in the experimental group.
+
+*H~1~* : There exists a correlation between an effect and any other effect in the experimental group.
+
+```{r}
+E1efficient_effect_cor_e <- perform_cor_tests(E1efficient[E1efficient$Treatment > 0,], c(eHIMA.fit[,"Index"], "Direct"), alternative = "two.sided", method = "spearman")
+E1efficient_effect_cor_e
+```
+
+We reject the null hypothesis: There exists positive correlation between M2 and the Direct Effect (p \< 0.05). There exists negative correlation between M3 and the Direct Effect. For the relationships between each mediator effect, the null hypothesis cannot be rejected. We will conduct bootstrap sampling to find the true mean of each effect in the control group and experimental group.
+
+```{r}
+E1efficient_control_long <- melt(E1efficient[E1efficient$Treatment == 0,eHIMA.fit[,"Index"]], variable.name = "Effect", value.name = "Contribution")
+head(E1efficient_control_long)
+E1efficient_control_pl <- plot_violins(E1efficient_control_long, x = "Effect", y = "Contribution", "Example 1 Efficient HIMA Control Group Effects")
+E1efficient_control_boot <- boot_tests(data = E1efficient_control_long, x = "Effect", y = "Contribution", statistic = mean)
+E1efficient_control_boot
+```
+
+```{r}
+E1efficient_experimental_long <- melt(E1efficient[E1efficient$Treatment != 0,c(eHIMA.fit[,"Index"], "Direct")], variable.name = "Effect", value.name = "Contribution")
+head(E1efficient_experimental_long)
+E1efficient_experimental_pl <- plot_violins(E1efficient_experimental_long, x = "Effect", y = "Contribution", "Example 1 Efficient HIMA Experimental Group Effects")
+E1efficient_experimental_boot <- boot_tests(data = E1efficient_experimental_long, x = "Effect", y = "Contribution", statistic = mean)
+E1efficient_experimental_boot
+```
+
+In the experimental group, the mean contributions of each effect are much higher than they are in the control group.
+
+We are going to test for correlations between effects and the measured outcome and residuals of the mediator adjusted prediction to the measured outcome.
+
+*H~0~* : There exists no correlation between any effect and measured outcome in the experimental group.
+
+*H~1~* : There exists a correlation between any effect and measured outcome in the experimental group.
+
+```{r}
+E1efficient_effect_outcome_cor <- perform_cor_tests(E1efficient, x = c(eHIMA.fit[,"Index"], "Direct", "Residuals"), y = "Outcome", alternative = "two.sided", method = "spearman")
+E1efficient_effect_outcome_cor
+```
+
+We can reject the null hypothesis(p \< 0.05). For all effects, there exists positive correlation to the outcome. The residuals of the model do not show strong correlation with the Outcome, indicating that it is unlikely for magnitude of outcome to be a limiting factor in the accuracy of effect contributions. We will move on to testing the correlation the effects and residuals have to the Age of the subjects.
+
+*H~0~* : There exists no correlation between any effect and age in the experimental group.
+
+*H~1~* : There exists a correlation between any effect and age in the experimental group.
+
+```{r}
+E1efficient_effect_age_cor <- perform_cor_tests(E1efficient, x = c(eHIMA.fit[,"Index"], "Direct", "Residuals"), y = "Age", alternative = "two.sided", method = "spearman")
+E1efficient_effect_age_cor
+```
+
+We can reject the null hypothesis(adjusted p \< 0.05). M2, and the direct effect have positive correlation with the age. These results suggest that age of the subject affects their sensitivity to the effects of each mediator. The correlation between Age and the residuals of the mediator adjusted model do not have statistical significance, suggesting that the age of the subject does not strongly influence the model's inaccuracies.
+
+##### Test for differences across groups
+
+We are going to use the Kruskal-Wallis test to determine the difference in variance for effects, residuals, and the outcome across sexes.
+
+*H~0~* : There exists no difference in medians in any effects and the outcome across male and female subjects.
+
+*H~1~* : There exists a difference in medians in any effects and the outcome across male and female subjects.\
+
+```{r}
+E1efficient_kruskal_sex <- perform_kruskal(E1efficient, "Sex", c(e1[,"ID"], "Direct", "Outcome", "Residuals"))
+E1efficient_kruskal_sex
+```
+
+The null hypothesis cannot be rejected(adjusted p \> 0.05). The difference in medians in residuals in male subjects and female subjects is statistically insignificant, suggesting that the sex of the patient is not a limiting factor in the accuracy of the model.
+
+```{r}
+E1efficient$Sex <- ifelse(E1efficient$Sex == 0, "Male", "Female")
+E1efficient_sex_pl <- plot_violins(E1efficient, "Sex", "Direct", plotname = "Example 1 Efficient HIMA Direct ~ Sex Violin Plot")
+E1efficient_sex_pl
+boot_tests(E1efficient, "Sex", "Direct", mean)
+```
+
+##### Findings
+
+The results of **eHIMA** for Example 1 show:
+
+The values for each effect are not normally distributed.
+
+M2 has positive correlation with the direct effect. M3 has negative correlation with the direct effect.
+
+All effects have a positive correlation with the outcome.
+
+The direct effect and M2 have positive correlation with age.
+
+The residuals cannot be attributed to the input data as a limiting factor.
+
+### Mediation Analysis with MCP eHIMA
+
+#### Mediator Identification
+
+```{r}
+e1e <- himaFit(Outcome ~ Treatment + Sex + Age,
+               data.pheno = himaDat$Example1$PhenoData,
+               data.M = himaDat$Example1$Mediator,
+               mediator.type = "gaussian",
+               efficient = TRUE,
+               penalty = "MCP", # Efficient HIMA does not support DBlasso
+               scale = FALSE
+) # Disabled only for simulation data
+e1e
+summary(Example1$Mediator[,e1e[,"ID"]])
+## End(Not run)
+```
+
+M1, M2, and M3 have been identified as the top three most significant mediator variables. (p \< 0.05)
+
+**alpha_hat** represents the effect the treatment has on the mediators.
+
+**beta_hat** represents the effect the mediators have towards the outcome.
+
+**alpha_se** is the standard error for **E(M \| X, Cov).**
+
+**beta_se** is the standard error for **E(Y \| M, Cov).**
+
+**IDE** stands for "Indirect Effect", and is the result of **alpha_hat\*beta_hat**.
+
+```{r}
+E1mcpEfficient<- estimatedEffects(fit = e1e, IDEcoefs = e1e[,"alpha*beta"], betas = e1e[,"beta"])
+E1mcpefficientpl <- plot_mediator_adjustments(actual = himaDat$Example1$PhenoData$Outcome,
+                         estimations = E1mcpEfficient,
+                         mediator_indices = e1e[,"ID"],
+                         plotname = "Example One Efficient MCP HIMA Outcome Predictions")
+E1mcpefficientpl
+
+```
+
+The consideration of mediators allows the relationship between Treatment and Outcome to be much more accurately described.
+
+The contribution towards the outcome by each mediator is calculated as **M \* beta_hat.**
+
+The contribution towards the outcome by the Direct Effect is calculated as the **E(Y \| X, Cov) - IDE**.
+
+The mediator adjusted prediction is **E(Y \| X, M, Cov) = 𝛽\*M + E(Y \| X, Cov) - IDE**.
+
+#### Effect Analysis
+
+##### Test for Normality
+
+*H~0~* : The values for every type of measured effect are drawn from the normal distribution.
+
+*H~1~* : The values for every type of measured effect are drawn from outside the normal distribution.
+
+```{r}
+E1mcpEfficient_control_ks_results <- kstests(dat = E1mcpEfficient[E1mcpEfficient$Treatment == 0,], exclude = c("Treatment","Sex","Other", "DominantEffect", "Direct"))
+print(data.frame(E1mcpEfficient_control_ks_results))
+E1mcpEfficient_experimental_ks_results <- kstests(dat = E1mcpEfficient[E1mcpEfficient$Treatment != 0,], exclude = c("Treatment","Sex","Other", "DominantEffect", "Direct"))
+print(data.frame(E1mcpEfficient_experimental_ks_results))
+```
+
+##### Tests for Correlation
+
+We reject *H~0~* (p \< 0.05). In rejection of the null hypothesis, we shall test for whether there exists correlations between each mediator effect.
+
+*H~0~* : There exists no correlation between a mediator effect and any other mediator effect.
+
+*H~1~* : There exists a correlation between an effect and any other mediator effect.
+
+```{r}
+E1mcpEfficient_effect_cor <- perform_cor_tests(E1mcpEfficient, c(e1e[,"ID"]), alternative = "two.sided", method = "spearman")
+E1mcpEfficient_effect_cor
+```
+
+We cannot reject the null hypothesis(adjusted p \> 0.05). We will follow up on this by testing for the correlation between each effect for the experimental group, where the direct effect is always present.
+
+*H~0~* : There exists no correlation between an effect and any other effect in the experimental group.
+
+*H~1~* : There exists a correlation between an effect and any other effect in the experimental group.
+
+```{r}
+E1mcpEfficient_effect_cor_e <- perform_cor_tests(E1mcpEfficient[E1mcpEfficient$Treatment > 0,], c(e1e[,"ID"], "Direct"), alternative = "two.sided", method = "spearman")
+E1mcpEfficient_effect_cor_e
+```
+
+We reject the null hypothesis: There exists positive correlation between M2 and the Direct Effect (p \< 0.05). There exists negative correlation between M3 and the Direct Effect. For the relationships between each mediator effect, the null hypothesis cannot be rejected. We will conduct bootstrap sampling to find the true mean of each effect in the control group and experimental group.
+
+```{r}
+E1mcpEfficient_control_long <- melt(E1mcpEfficient[E1mcpEfficient$Treatment == 0,e1e[,"ID"]], variable.name = "Effect", value.name = "Contribution")
+head(E1mcpEfficient_control_long)
+E1mcpEfficient_control_pl <- plot_violins(E1mcpEfficient_control_long, x = "Effect", y = "Contribution", "Example 1 Efficient MCP HIMA Control Group Effects")
+E1mcpEfficient_control_boot <- boot_tests(data = E1mcpEfficient_control_long, x = "Effect", y = "Contribution", statistic = mean)
+E1efficient_control_boot
+```
+
+```{r}
+E1mcpEfficient_experimental_long <- melt(E1mcpEfficient[E1mcpEfficient$Treatment != 0,c(e1e[,"ID"], "Direct")], variable.name = "Effect", value.name = "Contribution")
+head(E1mcpEfficient_experimental_long)
+E1mcpEfficient_experimental_pl <- plot_violins(E1mcpEfficient_experimental_long, x = "Effect", y = "Contribution", "Example 1 Efficient MCP HIMA Experimental Group Effects")
+E1mcpEfficient_experimental_boot <- boot_tests(data = E1mcpEfficient_experimental_long, x = "Effect", y = "Contribution", statistic = mean)
+E1mcpEfficient_experimental_boot
+```
+
+In the experimental group, the mean contributions of each effect are much higher than they are in the control group.
+
+We are going to test for correlations between effects and the measured outcome and residuals of the mediator adjusted prediction to the measured outcome.
+
+*H~0~* : There exists no correlation between any effect and measured outcome in the experimental group.
+
+*H~1~* : There exists a correlation between any effect and measured outcome in the experimental group.
+
+```{r}
+E1mcpEfficient_effect_outcome_cor <- perform_cor_tests(E1mcpEfficient, x = c(e1e[,"ID"], "Direct", "Residuals"), y = "Outcome", alternative = "two.sided", method = "spearman")
+E1mcpEfficient_effect_outcome_cor
+```
+
+We can reject the null hypothesis(adjusted p \< 0.05). For all effects, there exists positive correlation to the outcome. The residuals of the model do not show strong correlation with the Outcome, indicating that it is unlikely for magnitude of outcome to be a limiting factor in the accuracy of effect contributions. We will move on to testing the correlation the effects and residuals have to the Age of the subjects.
+
+*H~0~* : There exists no correlation between any effect and age in the experimental group.
+
+*H~1~* : There exists a correlation between any effect and age in the experimental group.
+
+```{r}
+E1mcpEfficient_effect_age_cor <- perform_cor_tests(E1mcpEfficient, x = c(e1e[,"ID"], "Direct", "Residuals"), y = "Age", alternative = "two.sided", method = "spearman")
+E1mcpEfficient_effect_age_cor
+```
+
+We can reject the null hypothesis(adjusted p \< 0.05). M2 and the direct effect have positive correlation with age. These results suggest that age of the subject affects their sensitivity to the effects of each mediator. The correlation between Age and the residuals of the mediator adjusted model do not have statistical significance, suggesting that the age of the subject does not strongly influence the model's inaccuracies.
+
+##### Test for differences across groups
+
+We are going to use the Kruskal-Wallis test to determine the difference in variance for effects, residuals, and the outcome across sexes.
+
+*H~0~* : There exists no difference in medians in any effects and the outcome across male and female subjects.
+
+*H~1~* : There exists a difference in medians in any effects and the outcome across male and female subjects.\
+
+```{r}
+E1mcpEfficient_kruskal_sex <- perform_kruskal(E1mcpEfficient, "Sex", c(e1e[,"ID"], "Direct", "Outcome", "Residuals"))
+E1mcpEfficient_kruskal_sex
+```
+
+The null hypothesis cannot be rejected(p \< 0.05). The difference in variance in residuals in male subjects and female subjects is statistically insignificant, suggesting that the sex of the patient is not a limiting factor in the accuracy of the model.
+
+```{r}
+E1mcpEfficient$Sex <- ifelse(E1mcpEfficient$Sex == 0, "Male", "Female")
+E1mcpEfficient_sex_pl <- plot_violins(E1mcpEfficient, "Sex", "Direct", plotname = "Example 1 Efficient MCP HIMA Direct ~ Sex Violin Plot")
+E1mcpEfficient_sex_pl
+boot_tests(E1mcpEfficient, "Sex", "Direct", mean)
+```
+
+##### Findings
+
+The results of **MCP eHIMA** for Example 1 show:
+
+The values for each effect are not normally distributed.
+
+M2 has positive correlation with the direct effect. M3 has negative correlation with the direct effect.
+
+All effects have a positive correlation with the outcome.
+
+The direct effect and M2 have positive correlation with age.
+
+The residuals cannot be attributed to the input data as a limiting factor.
+
+#### Conclusion
+
+The findings from each HIMA Method used on Example 1 in the HIMA documentation are the same. Despite having different algorithms for identifying mediators, they were all able to identify the three true mediators, and have the same **beta** values to a minimum of 6 significant digits.
+
+## Example 2 Data Overview
+
+### Dimensions of the Data
+
+```{r data-dimensions}
+dim(Example2$PhenoData)
+dim(Example2$Mediator)
+```
+
+### Data Overview
+
+Numerical Features
+
+```{r}
+# Histograms for numerical features
+num_vars <- sapply(Example2$PhenoData, is.numeric)
+data_numeric <- Example2$PhenoData[, num_vars]
+lapply(names(data_numeric), function(var) {
+  print(ggplot(Example2$PhenoData, aes_string(x = var)) + 
+        geom_histogram(binwidth = 1, fill = "blue", color = "black", alpha = 0.7) +
+        labs(title = paste("Distribution of", var)))
+})
+summary(Example2$PhenoData)
+```
+
+**Treatment**: A binary feature that indicates the presence of the treatment for a test subject. **1** indicates the presence of the treatment. **0** indicates the absence of the treatment.
+
+**Disease**: A binary feature that indicates the testing result for the presence of a disease. **1** indicates a positive test result. **0** indicates a negative test result.
+
+**Sex**: A binary feature that indicates the biological sex of the subject. **1** indicates females, and **0** indicates males.
+
+**Age**: A continuous numerical features that represents the age of the subject in years.
+
+Categorical Features
+
+```{r}
+# Bar plots for categorical features
+cat_vars <- sapply(Example2$PhenoData, is.factor)
+data_categorical <- Example2$PhenoData[, cat_vars, drop = FALSE]
+lapply(names(data_categorical), function(var) {
+  print(ggplot(Example2$PhenoData, aes_string(x = var)) + 
+        geom_bar(fill = "blue", color = "black", alpha = 0.7) +
+        labs(title = paste("Frequency of", var)))
+})
+```
+
+### Example 2 Prediction Model
+
+```{r example2_plot}
+Example2fullmodel <- glm(Disease ~ Treatment + Age + Sex, data = Example2$PhenoData, family = "binomial")
+E2pred <- predict(Example2fullmodel, type = "response")
+E2predoutcome <- ifelse(E2pred >= 0.5, 1, 0)
+E2logloss <- -mean(himaDat$Example2$PhenoData$Disease * log(E2pred) + (1 - himaDat$Example2$PhenoData$Disease) * log(1 - E2pred))
+E2cm <- table(E2predoutcome, himaDat$Example2$PhenoData$Disease)
+if (nrow(E2cm) == 1) {
+  E2cm <- rbind(E2cm, c(0,0))
+  rownames(E2cm)[2] <- 1-as.numeric(rownames(E2cm)[1])
+}
+E2mcc <- ((E2cm["1","1"] 
+          * E2cm["0","0"] 
+          - E2cm["0","1"] 
+          * E2cm["1","0"]) 
+          / sqrt((E2cm["1","1"] 
+                  + E2cm["1","0"]) 
+                 * (E2cm["1","1"] 
+                    + E2cm["0","1"]) 
+                 * (E2cm["0","0"] 
+                    + E2cm["1","0"]) 
+                 * (E2cm["0","0"] 
+                    + E2cm["0","1"])))
+Example2modelpl <- ggplot(data.frame(himaDat$Example2$PhenoData, Response = predict(Example2fullmodel, type = "response")),
+                              aes(x = Treatment,
+                                  y = Response)) +
+  geom_point(position = position_jitter(width=0.06, height = 0.045),aes(color = factor(Disease)), size = 2) + # Use 'factor' to treat 'value' as categorical
+  geom_hline(yintercept=0.5, linetype='dotted', linewidth = 1, col = "blue") +
+  labs(title = "Example Two Full Model Outcome Predictions", x = "Treatment", y = "Probability of Testing Positive", color = "Disease\n") +
+  scale_color_manual(labels = c("Negative","Positive"),values = c("0" = "red", "1" = "green")) + # Manually set colors  # Points colored by actual value
+  theme_minimal() +
+  annotate("text", x = 0.6, y = 1, label = paste("Log Loss:", round(E2logloss, 2), "\nMCC:", round(E2mcc, 2), "\nTP:", E2cm["1","1"],"\nTN:", E2cm["0","0"], "\nFP:", E2cm["1","0"], "\nFN:", E2cm["0","1"]),
+           hjust = 1.1, vjust = 1.1, size = 4, color = "red")
+Example2modelpl
+```
+
+The model needs refinement through the consideration of mediators.
+
+### Mediation Analysis with classicHIMA
+
+#### Mediator Identification
+
+```{r}
+hima.logistic.fit <- classicHIMA(
+  X = himaDat$Example2$PhenoData$Treatment,
+  Y = himaDat$Example2$PhenoData$Disease,
+  M = himaDat$Example2$Mediator,
+  COV.XM = himaDat$Example2$PhenoData[, c("Sex", "Age")],
+  Y.type = "binary",
+  scale = FALSE, # Disabled only for simulation data
+  verbose = TRUE
+)
+hima.logistic.fit
+summary(Example2$Mediator[,hima.logistic.fit[,"Index"]])
+```
+
+M1, M2, and M3 have been identified as the top three most significant mediator variables. (p \< 0.05)
+
+**alpha_hat** represents the effect the treatment has on the mediators.
+
+**beta_hat** represents the effect the mediators have towards the outcome.
+
+**alpha_se** is the standard error for **E(M \| X, Cov).**
+
+**beta_se** is the standard error for **E(Y \| M, Cov).**
+
+**IDE** stands for "Indirect Effect", and is the result of **alpha_hat\*beta_hat**.
+
+```{r}
+E2classic <- estimatedEffects(fit = hima.logistic.fit,
+                              type = "binary",
+                              dat = himaDat$Example2,
+                              X = himaDat$Example2$PhenoData$Treatment,
+                              Y = himaDat$Example2$PhenoData$Disease,
+                              Cov = himaDat$Example2$PhenoData[, c("Sex", "Age")])
+
+
+E2classicmodelpl <- plot_mediator_adjustments(type = "binary",
+              actual = himaDat$Example2$PhenoData$Disease,
+              estimations = E2classic,
+              mediator_indices = hima.logistic.fit[,"Index"],
+              plotname = "Example Two Classic HIMA Outcome Predictions",
+              labels = c("Disease", "Negative", "Positive"))
+E2classicmodelpl
+```
+
+The consideration of mediators allows the relationship between Treatment and Outcome to be much more accurately described.
+
+The contribution towards the outcome by each mediator is calculated as **M \* beta_hat.**
+
+The contribution towards the outcome by the Direct Effect is calculated as the **E(Y \| X, Cov) - IDE**.
+
+The mediator adjusted prediction is **E(Y \| X, M, Cov) = 𝛽\*M + E(Y \| X, Cov) - IDE**.
+
+#### Effect Analysis
+
+##### Test for Normality
+
+*H~0~* : The values for every type of measured effect are drawn from the normal distribution.
+
+*H~1~* : The values for every type of measured effect are drawn from outside the normal distribution.
+
+```{r}
+E2classic_control_ks_results <- kstests(dat = E2classic[E2classic$Treatment == 0,], exclude = c("Treatment","Sex","Other", "DominantEffect", "Direct"))
+print(data.frame(E2classic_control_ks_results))
+E2classic_experimental_ks_results <- kstests(dat = E2classic[E2classic$Treatment != 0,], exclude = c("Treatment","Sex","Other", "DominantEffect", "Direct"))
+print(data.frame(E2classic_experimental_ks_results))
+```
+
+##### Tests for Correlation
+
+We reject *H~0~* (p \< 0.05). In rejection of the null hypothesis, we shall test for whether there exists correlations between each mediator effect.
+
+*H~0~* : There exists no correlation between a mediator effect and any other mediator effect.
+
+*H~1~* : There exists a correlation between an effect and any other mediator effect.
+
+```{r}
+E2classic_effect_cor <- perform_cor_tests(E2classic, c(hima.logistic.fit[,"Index"]), alternative = "two.sided", method = "spearman")
+E2classic_effect_cor
+```
+
+We cannot reject the null hypothesis(adjusted p \> 0.05). We will follow up on this by testing for the correlation between each effect for the experimental group, where the direct effect is always present.
+
+*H~0~* : There exists no correlation between an effect and any other effect in the experimental group.
+
+*H~1~* : There exists a correlation between an effect and any other effect in the experimental group.
+
+```{r}
+E2classic_effect_cor_e <- perform_cor_tests(E2classic[E2classic$Treatment != 0,], c(hima.logistic.fit[,"Index"], "Direct"), alternative = "two.sided", method = "spearman")
+E2classic_effect_cor_e
+```
+
+We fail to reject the null hypothesis: The correlation between each effect is not statistically significant( p \> 0.05). We will conduct bootstrap sampling to find the true mean of each effect in the control group and experimental group.
+
+```{r}
+E2classic_control_long <- melt(E2classic[E2classic$Treatment == 0,hima.logistic.fit[,"Index"]], variable.name = "Effect", value.name = "Contribution")
+head(E2classic_control_long)
+E2_classic_control_pl <- plot_violins(E2classic_control_long, x = "Effect", y = "Contribution", "Example 2 Classic HIMA Control Group Effects")
+E2classic_control_boot <- boot_tests(data = E2classic_control_long, x = "Effect", y = "Contribution", statistic = mean)
+E2classic_control_boot
+```
+
+```{r}
+E2classic_experimental_long <- melt(E2classic[E2classic$Treatment != 0,c(hima.logistic.fit[,"Index"], "Direct")], variable.name = "Effect", value.name = "Contribution")
+head(E2classic_experimental_long)
+E2classic_experimental_pl <- plot_violins(E2classic_experimental_long, x = "Effect", y = "Contribution", "Example 2 Classic HIMA Experimental Group Effects")
+E2classic_experimental_boot <- boot_tests(data = E2classic_experimental_long, x = "Effect", y = "Contribution", statistic = mean)
+E2classic_experimental_boot
+E2classic_experimental_pl
+```
+
+In the experimental group, the mean contributions of each effect are much higher than they are in the control group.
+
+We are going to test for correlations between effects and the adjusted log-odds ratio for P(1 \| X, M, Cov).
+
+*H~0~* : There exists no correlation between any effect and measured outcome in the experimental group.
+
+*H~1~* : There exists a correlation between any effect and measured outcome in the experimental group.
+
+```{r}
+E2classic_effect_lor_cor <- perform_cor_tests(E2classic, x = c(hima.logistic.fit[,"Index"], "Direct"), y = "Adjusted", alternative = "two.sided", method = "spearman")
+E2classic_effect_lor_cor
+```
+
+We can reject the null hypothesis(adjusted p \< 0.05). For all effects, there exists positive correlation to the log-odds ratio for P(1 \| X, M, Cov). We shall move on to testing for correlation between age and all effects.
+
+*H~0~* : There exists no correlation between any effect and age in the experimental group.
+
+*H~1~* : There exists a correlation between any effect and age in the experimental group.
+
+```{r}
+E2classic_effect_age_cor <- perform_cor_tests(E2classic, x = c(hima.logistic.fit[,"Index"], "Direct"), y = "Age", alternative = "two.sided", method = "spearman")
+E2classic_effect_age_cor
+```
+
+We fail to reject the null hypothesis(adjusted p \< 0.05). There is little statistical significance in the correlation between effects and age.
+
+##### Test for differences across groups
+
+We are going to use the Kruskal-Wallis test to determine the difference in variance for effects, and the total log odds across sexes.
+
+*H~0~* : There exists no difference in medians in any effects and the total log odds across male and female subjects.
+
+*H~1~* : There exists a difference in medians in any effects and the total log odds across male and female subjects.\
+
+```{r}
+E2classic_kruskal_sex <- perform_kruskal(E2classic, "Sex", c(hima.logistic.fit[,"Index"], "Direct", "Adjusted"))
+E2classic_kruskal_sex
+```
+
+The null hypothesis can be rejected. There exists a statistically significant difference in medians for the direct effect across male and female subjects.
+
+```{r}
+E2classic$Sex <- ifelse(E2classic$Sex == 0, "Male", "Female")
+E2classic_sex_pl <- plot_violins(E2classic, "Sex", "Direct", plotname = "Example 2 Classic HIMA Direct ~ Sex Violin Plot")
+E2classic_sex_pl
+boot_tests(E2classic, "Sex", "Direct", mean)
+```
+
+Females have decreased sensitivity to the direct effect of the Treatment. We shall move on to testing the correlation between effects and different disease outcomes.
+
+*H~0~* : There exists no difference in medians in any effects and the total log odds across disease positive and disease negative subjects.
+
+*H~1~* : There exists a difference in medians in any effects and the total log odds across disease positive and disease negative subjects.
+
+```{r}
+E2classic_kruskal_disease <- perform_kruskal(E2classic, "Disease", c(hima.logistic.fit[,"Index"], "Direct", "Adjusted"))
+E2classic_kruskal_disease
+```
+
+The null hypothesis can be rejected(adjusted p \< 0.05). For all effects, there is a difference in medians across different disease statuses.
+
+```{r}
+E2classic$Disease <- ifelse(E2classic$Disease == 0, "Negative", "Positive")
+E2classic_disease_pl <- plot_violins(E2classic, "Disease", "Direct", plotname = "Example 1 Classic HIMA Direct ~ Disease Violin Plot")
+E2classic_disease_pl
+boot_tests(E2classic, "Disease", "Direct", mean)
+boot_tests(E2classic, "Disease", "M1", mean)
+boot_tests(E2classic, "Disease", "M2", mean)
+boot_tests(E2classic, "Disease", "M3", mean)
+```
+
+##### Findings
+
+The results of **classicHIMA** for Example 2 show:
+
+The values for each effect are not normally distributed.
+
+All effects have a positive correlation with the log-odds ratio for P(1 \| X, M, Cov).
+
+Males are more susceptible to the direct effect than females.
+
+For negative disease test outcomes, the mediator effects had a negative effect, while the Direct retained a smaller yet still positive effect.
+
+### Mediation Analysis with MCP HIMA
+
+#### Mediator Identification
+
+```{r}
+e2 <- himaFit(Disease ~ Treatment + Sex + Age,
+              data.pheno = himaDat$Example2$PhenoData,
+              data.M = himaDat$Example2$Mediator,
+              mediator.type = "gaussian",
+              penalty = "MCP",
+              scale = FALSE
+) # Disabled only for simulation data
+e2
+summary(Example2$Mediator[,e2[,"ID"]])
+```
+
+M1, M2, and M3 have been identified as the top three most significant mediator variables. (p \< 0.05)
+
+**alpha_hat** represents the effect the treatment has on the mediators.
+
+**beta_hat** represents the effect the mediators have towards the outcome.
+
+**alpha_se** is the standard error for **E(M \| X, Cov).**
+
+**beta_se** is the standard error for **E(Y \| M, Cov).**
+
+**IDE** stands for "Indirect Effect", and is the result of **alpha_hat\*beta_hat**.
+
+```{r}
+E2mcp <- estimatedEffects(fit = e2,
+                          betas = e2[,"beta"],
+                          IDEcoefs = e2[,"alpha*beta"],
+                          type = "binary",
+                          dat = himaDat$Example2,
+                          X = himaDat$Example2$PhenoData$Treatment,
+                          Y = himaDat$Example2$PhenoData$Disease,
+                          Cov = himaDat$Example2$PhenoData[, c("Sex", "Age")])
+
+attributes(e2)$variable.labels
+
+E2mcpmodelpl <- plot_mediator_adjustments(type = "binary",
+                                  actual = himaDat$Example2$PhenoData$Disease,
+                                  estimations = E2mcp,
+                                  mediator_indices = e2[,"ID"],
+                                  plotname = "Example Two MCP HIMA Outcome Predictions",
+                                  labels = c("Disease", "Negative", "Positive"))
+E2mcpmodelpl
+```
+
+The consideration of mediators allows the relationship between Treatment and Outcome to be much more accurately described.
+
+The contribution towards the outcome by each mediator is calculated as **M \* beta_hat.**
+
+The contribution towards the outcome by the Direct Effect is calculated as the **E(Y \| X, Cov) - IDE**.
+
+The mediator adjusted prediction is **E(Y \| X, M, Cov) = 𝛽\*M + E(Y \| X, Cov) - IDE**.
+
+#### Effect Analysis
+
+##### Test for Normality
+
+*H~0~* : The values for every type of measured effect are drawn from the normal distribution.
+
+*H~1~* : The values for every type of measured effect are drawn from outside the normal distribution.
+
+```{r}
+E2mcp_control_ks_results <- kstests(dat = E2mcp[E2mcp$Treatment == 0,], exclude = c("Treatment","Sex","Other", "DominantEffect", "Direct"))
+print(data.frame(E2mcp_control_ks_results))
+E2mcp_experimental_ks_results <- kstests(dat = E2mcp[E2mcp$Treatment != 0,], exclude = c("Treatment","Sex","Other", "DominantEffect", "Direct"))
+print(data.frame(E2mcp_experimental_ks_results))
+```
+
+##### Tests for Correlation
+
+We reject *H~0~* (p \< 0.05). In rejection of the null hypothesis, we shall test for whether there exists correlations between each mediator effect.
+
+*H~0~* : There exists no correlation between a mediator effect and any other mediator effect.
+
+*H~1~* : There exists a correlation between an effect and any other mediator effect.
+
+```{r}
+E2mcp_effect_cor <- perform_cor_tests(E2mcp, c(e2[,"ID"]), alternative = "two.sided", method = "spearman")
+E2mcp_effect_cor
+```
+
+We reject the null hypothesis: There exists positive correlation in M1, M2, M3 with the direct effect(adjusted p \< 0.05). We will follow up on this by testing for the correlation between each effect for the experimental group, where the direct effect is always present.
+
+*H~0~* : There exists no correlation between an effect and any other effect in the experimental group.
+
+*H~1~* : There exists a correlation between an effect and any other effect in the experimental group.
+
+```{r}
+E2mcp_effect_cor_e <- perform_cor_tests(E2mcp[E2mcp$Treatment > 0,], c(e2[,"ID"], "Direct"), alternative = "two.sided", method = "spearman")
+E2mcp_effect_cor_e
+```
+
+We fail to reject the null hypothesis: The correlation between each effect is not statistically significant( p \> 0.05). We will conduct bootstrap sampling to find the true mean of each effect in the control group and experimental group.
+
+```{r}
+E2mcp_control_long <- melt(E2mcp[E2mcp$Treatment == 0,e2[,"ID"]], variable.name = "Effect", value.name = "Contribution")
+head(E2mcp_control_long)
+E2mcp_control_pl <- plot_violins(E2mcp_control_long, x = "Effect", y = "Contribution", "Example 2 MCP HIMA Control Group Effects")
+E2mcp_control_boot <- boot_tests(data = E2mcp_control_long, x = "Effect", y = "Contribution", statistic = mean)
+E2mcp_control_boot
+E2mcp_control_pl
+```
+
+```{r}
+E2mcp_experimental_long <- melt(E2mcp[E2mcp$Treatment != 0,c(e2[,"ID"], "Direct")], variable.name = "Effect", value.name = "Contribution")
+head(E2mcp_experimental_long)
+E2mcp_experimental_pl <- plot_violins(E2mcp_experimental_long, x = "Effect", y = "Contribution", "Example 2 MCP HIMA Experimental Group Effects")
+E2mcp_experimental_boot <- boot_tests(data = E2mcp_experimental_long, x = "Effect", y = "Contribution", statistic = mean)
+E2mcp_experimental_boot
+E2mcp_experimental_pl
+```
+
+In the experimental group, the mean contributions of each effect are much higher than they are in the control group.
+
+We are going to test for correlations between effects and the adjusted log-odds ratio for P(1 \| X, M, Cov).
+
+*H~0~* : There exists no correlation between any effect and measured outcome in the experimental group.
+
+*H~1~* : There exists a correlation between any effect and measured outcome in the experimental group.
+
+```{r}
+E2mcp_effect_lor_cor <- perform_cor_tests(E2mcp, x = c(e2[,"ID"], "Direct"), y = "Adjusted", alternative = "two.sided", method = "spearman")
+E2mcp_effect_lor_cor
+```
+
+We can reject the null hypothesis(adjusted p \< 0.05). For all effects, there exists positive correlation to the log-odds ratio for P(1 \| X, M, Cov). We shall move on to testing for correlation between age and all effects.
+
+*H~0~* : There exists no correlation between any effect and age in the experimental group.
+
+*H~1~* : There exists a correlation between any effect and age in the experimental group.
+
+```{r}
+E2mcp_effect_age_cor <- perform_cor_tests(E2mcp, x = c(e2[,"ID"], "Direct"), y = "Age", alternative = "two.sided", method = "spearman")
+E2mcp_effect_age_cor
+```
+
+We fail to reject the null hypothesis(adjusted p \< 0.05). There is little statistical significance in the correlation between effects and age.
+
+##### Test for differences across groups
+
+We are going to use the Kruskal-Wallis test to determine the difference in variance for effects, and the total log odds across sexes.
+
+*H~0~* : There exists no difference in medians in any effects and the total log odds across male and female subjects.
+
+*H~1~* : There exists a difference in medians in any effects and the total log odds across male and female subjects.\
+
+```{r}
+E2mcp_kruskal_sex <- perform_kruskal(E2mcp, "Sex", c(e2[,"ID"], "Direct", "Adjusted"))
+E2mcp_kruskal_sex
+```
+
+The null hypothesis can be rejected. There exists a statistically significant difference in medians for the direct effect across male and female subjects.
+
+```{r}
+E2mcp$Sex <- ifelse(E2mcp$Sex == 0, "Male", "Female")
+E2mcp_sex_pl <- plot_violins(E2mcp, "Sex", "Direct", plotname = "Example 2 MCP HIMA Direct ~ Sex Violin Plot")
+E2mcp_sex_pl
+boot_tests(E2mcp, "Sex", "Direct", mean)
+```
+
+Females have decreased sensitivity to the direct effect of the Treatment. We shall move on to testing the correlation between effects and different disease outcomes.
+
+*H~0~* : There exists no difference in medians in any effects and the total log odds across disease positive and disease negative subjects.
+
+*H~1~* : There exists a difference in medians in any effects and the total log odds across disease positive and disease negative subjects.
+
+```{r}
+E2mcp_kruskal_disease <- perform_kruskal(E2mcp, "Disease", c(e2[,"ID"], "Direct", "Adjusted"))
+E2mcp_kruskal_disease
+```
+
+The null hypothesis can be rejected(adjusted p \< 0.05). For all effects, there is a difference in medians across different disease statuses.
+
+```{r}
+E2mcp$Disease <- ifelse(E2mcp$Disease == 0, "Negative", "Positive")
+E2mcp_disease_pl <- plot_violins(E2mcp, "Disease", "Direct", plotname = "Example 2 MCP HIMA Direct ~ Disease Violin Plot")
+E2classic_disease_pl
+boot_tests(E2mcp, "Disease", "Direct", mean)
+boot_tests(E2mcp, "Disease", "M1", mean)
+boot_tests(E2mcp, "Disease", "M2", mean)
+boot_tests(E2mcp, "Disease", "M3", mean)
+```
+
+##### Findings
+
+The results of **MCP HIMA** for Example 2 show:
+
+The values for each effect are not normally distributed.
+
+There exists positive correlation between M2 and M3.
+
+The Direct effect has a positive correlation with M2 and M3.
+
+All effects have a positive correlation with the log-odds ratio for P(1 \| X, M, Cov).
+
+Males are more sensitive to the direct effect than females.
+
+For negative disease test outcomes, the mediator effects had a negative effect, while the Direct retained a smaller yet still positive effect.
+
+#### Conclusion
+
+When run on the data of Example 2, both **classic HIMA** and **MCP HIMA** yield the same statisticallly significant findings and similar calculations for contributions of each effect. Though a vast improvement from the original, the model requires further refinement.
+
+## Example 3 Data Overview
+
+### Dimensions of the Data
+
+```{r}
+dim(Example3$PhenoData)
+dim(Example3$Mediator)
+```
+
+### Data Overview
+
+Numerical Features
+
+```{r}
+# Histograms for numerical features
+num_vars <- sapply(Example3$PhenoData, is.numeric)
+data_numeric <- Example3$PhenoData[, num_vars]
+lapply(names(data_numeric), function(var) {
+  print(ggplot(Example3$PhenoData, aes_string(x = var)) + 
+        geom_histogram(binwidth = 1, fill = "blue", color = "black", alpha = 0.7) +
+        labs(title = paste("Distribution of", var)))
+})
+summary(Example3$PhenoData)
+```
+
+**Treatment**: A binary feature that indicates the presence of the treatment for a test subject. **1** indicates the presence of the treatment. **0** indicates the absence of the treatment.
+
+**Time**: A continuous feature that indicates the survival time of a subject. Units are ambiguous.
+
+**Status**: A censorship indicator for the status of the subject.
+
+**Sex**: A binary feature that indicates the biological sex of the subject. **1** indicates females, and **0** indicates males.
+
+**Age**: A continuous numerical features that represents the age of the subject in years.
+
+Categorical Features
+
+```{r}
+# Bar plots for categorical features
+cat_vars <- sapply(Example2$PhenoData, is.factor)
+data_categorical <- Example2$PhenoData[, cat_vars, drop = FALSE]
+lapply(names(data_categorical), function(var) {
+  print(ggplot(Example2$PhenoData, aes_string(x = var)) + 
+        geom_bar(fill = "blue", color = "black", alpha = 0.7) +
+        labs(title = paste("Frequency of", var)))
+})
+```
+
+### Example 3 Prediction Model
+
+```{r example3_plot}
+Example3model <- coxph(Surv(Time, Status) ~ Treatment + Sex + Age, data = himaDat$Example3$PhenoData)
+Example3modelpl <- ggplot(data.frame(Predicted = predict(Example3model),
+                                         himaDat$Example3$PhenoData),
+                              aes(x = Predicted, y = Time)) +
+  geom_point(color = "black", size = 2) +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  labs(title = "Example Three Full Model Outcome Predictions", x = "Hazard Ratio", y = "Time", color = "Disease\n") +
+  theme_minimal()
+Example3modelpl
+```
+
+Clearly, the presence of treatment in conjunction with covariates do not accurately describe the relationship the presence of treatment has with the presence of disease. Mediation analysis must be performed to remedy this.
+
+### Mediation Analysis with survHIMA
+
+#### Mediator Identification
+
+```{r}
+survHIMA.fit <- survHIMA(
+  X = himaDat$Example3$PhenoData$Treatment,
+  M = himaDat$Example3$Mediator,
+  OT = himaDat$Example3$PhenoData$Time,
+  status = himaDat$Example3$PhenoData$Status,
+  COV = himaDat$Example3$PhenoData[, c("Sex", "Age")],
+  scale = FALSE, # Disabled only for simulation data
+  FDRcut = 0.05,
+  verbose = TRUE
+)
+survHIMA.fit
+summary(Example3$Mediator[,survHIMA.fit[,"Index"]])
+```
+
+M1, M2, and M3 have been identified as the top three most significant mediator variables. (p \< 0.05)
+
+**alpha_hat** represents the effect the treatment has on the mediators.
+
+**beta_hat** represents the effect the mediators have towards the outcome.
+
+**alpha_se** is the standard error for **E(M \| X, Cov).**
+
+**beta_se** is the standard error for **E(Y \| M, Cov).**
+
+**IDE** stands for "Indirect Effect", and is the result of **alpha_hat\*beta_hat**.
+
+```{r}
+E3survhima <- estimatedEffects(fit = survHIMA.fit,
+                              betas = survHIMA.fit[,"beta_hat"],
+                              type = "continuous",
+                              dat = himaDat$Example3,
+                              X = himaDat$Example3$PhenoData$Treatment,
+                              Y = Surv(himaDat$Example3$PhenoData$Time, himaDat$Example3$PhenoData$Status),
+                              Cov = himaDat$Example3$PhenoData[, c("Sex", "Age")])
+E3survivalmodelpl <- plot_mediator_adjustments(actual = Surv(himaDat$Example3$PhenoData$Time, himaDat$Example3$PhenoData$Status),
+                                  estimations = E3survhima,
+                                  mediator_indices = survHIMA.fit[,"Index"],
+                                  plotname = "Example Three Survival HIMA Survival Time Predictions")
+E3survivalmodelpl
+```
+
+The consideration of mediators allows the relationship between Treatment and Time to be much more accurately described.
+
+The contribution towards the outcome by each mediator is calculated as **M \* beta_hat.**
+
+The contribution towards the outcome by the Direct Effect is calculated as the **E(Y \| X, Cov) - IDE**.
+
+The mediator adjusted prediction is **E(Y \| X, M, Cov) = 𝛽\*M + E(Y \| X, Cov) - IDE**.
+
+#### Effect Analysis
+
+##### Test for Normality
+
+*H~0~* : The values for every type of measured effect are drawn from the normal distribution.
+
+*H~1~* : The values for every type of measured effect are drawn from outside the normal distribution.
+
+```{r}
+E3survhima_control_ks_results <- kstests(dat = E3survhima[E3survhima$Treatment == 0,], exclude = c("Status","Treatment","Sex","Other", "DominantEffect", "Direct"))
+print(data.frame(E3survhima_control_ks_results))
+E3survhima_experimental_ks_results <- kstests(dat = E3survhima[E3survhima$Treatment != 0,], exclude = c("Treatment","Sex","Other", "DominantEffect", "Direct","Status"))
+print(data.frame(E3survhima_experimental_ks_results))
+```
+
+##### Tests for Correlation
+
+We reject *H~0~* (p \< 0.05). In rejection of the null hypothesis, we shall test for whether there exists correlations between each mediator effect.
+
+*H~0~* : There exists no correlation between a mediator effect and any other mediator effect.
+
+*H~1~* : There exists a correlation between an effect and any other mediator effect.
+
+```{r}
+E3survhima_effect_cor <- perform_cor_tests(E3survhima, c(survHIMA.fit[,"Index"]), alternative = "two.sided", method = "spearman")
+E3survhima_effect_cor
+```
+
+We reject the null hypothesis(adjusted p \< 0.05). There exists positive correlation with M1 to M2 and M1 to M3. We will follow up on this by testing for the correlation between each effect for the experimental group, where the direct effect is always present.
+
+*H~0~* : There exists no correlation between an effect and any other effect in the experimental group.
+
+*H~1~* : There exists a correlation between an effect and any other effect in the experimental group.
+
+```{r}
+E3survhima_effect_cor_e <- perform_cor_tests(E3survhima[E3survhima$Treatment > 0,], c(survHIMA.fit[,"Index"], "Direct"), alternative = "two.sided", method = "spearman")
+E3survhima_effect_cor_e
+```
+
+We can reject the null hypothesis: There exists negative correlation with M2 to M1 and M3(adjusted p \< 0.05). We will conduct bootstrap sampling to find the true mean of each effect in the control group and experimental group.
+
+```{r}
+E3survhima_control_long <- melt(E3survhima[E3survhima$Treatment == 0,survHIMA.fit[,"Index"]], variable.name = "Effect", value.name = "Contribution")
+head(E3survhima_control_long)
+E3survhima_control_pl <- plot_violins(E3survhima_control_long, x = "Effect", y = "Contribution", "Example 3 survHIMA Control Group Effects")
+E3survhima_control_boot <- boot_tests(data = E3survhima_control_long, x = "Effect", y = "Contribution", statistic = mean)
+E3survhima_control_boot
+E3survhima_control_pl
+```
+
+```{r}
+E3survhima_experimental_long <- melt(E3survhima[E3survhima$Treatment != 0,c(survHIMA.fit[,"Index"], "Direct")], variable.name = "Effect", value.name = "Contribution")
+head(E3survhima_experimental_long)
+E3survhima_experimental_pl <- plot_violins(E3survhima_experimental_long, x = "Effect", y = "Contribution", "Example 3 survHIMA Experimental Group Effects")
+E3survhima_experimental_boot <- boot_tests(data = E3survhima_experimental_long, x = "Effect", y = "Contribution", statistic = mean)
+E3survhima_experimental_boot
+E3survhima_experimental_pl
+```
+
+In the experimental group, the mean contributions of each effect are much higher than they are in the control group.
+
+We are going to test for correlations between effects and the adjusted parametric Hazard Ratio.
+
+*H~0~* : There exists no correlation between any effect and the adjusted hazard ratio
+
+*H~1~* : There exists a correlation between any effect and the adjusted hazard ratio.
+
+```{r}
+E3survhima_effect_phr_cor <- perform_cor_tests(E3survhima, x = c(survHIMA.fit[,"Index"], "Direct"), y = "Adjusted", alternative = "two.sided", method = "spearman")
+E3survhima_effect_phr_cor
+```
+
+We can reject the null hypothesis(adjusted p \< 0.05). For all mediator effects, there exists positive correlation to the parametric Hazard Ratio. The direct effect has negative correlation with the hazard ratio(adjusted p \< 0.05). We shall move on to testing for correlation between time and adjusted hazard ratio.
+
+*H~0~* : There exists no correlation between Time and Hazard Ratio.
+
+*H~1~* : There exists a correlation between Time and Hazard Ratio.
+
+```{r}
+E3survhima_phr_time_cor <- perform_cor_tests(E3survhima, x = "Adjusted", y = "Time", alternative = "two.sided", method = "spearman")
+E3survhima_phr_time_cor
+```
+
+We can reject the null hypothesis(p \< 0.05). We shall move on to testing for correlation between time and all effects.
+
+*H~0~* : There exists no correlation between any effect and survival time.
+
+*H~1~* : There exists a correlation between any effect and survival time.
+
+```{r}
+E3survhima_effect_time_cor <- perform_cor_tests(E3survhima, x = c(survHIMA.fit[,"Index"], "Direct"), y = "Time", alternative = "two.sided", method = "spearman")
+E3survhima_effect_time_cor
+```
+
+We can reject the null hypothesis(adjusted p \< 0.05). For all mediators, there exists negative correlation with time. The direct effect has positive correlation with time. We shall move on to testing for correlation between age and all effects.
+
+*H~0~* : There exists no correlation between any effect and age in the experimental group.
+
+*H~1~* : There exists a correlation between any effect and age in the experimental group.
+
+```{r}
+E3survhima_effect_age_cor <- perform_cor_tests(E3survhima, x = c(survHIMA.fit[,"Index"], "Direct"), y = "Age", alternative = "two.sided", method = "spearman")
+E3survhima_effect_age_cor
+```
+
+We can reject the null hypothesis(adjusted p \< 0.05). There exists positive correlation with age to the direct effect and M2.
+
+##### Test for differences across groups
+
+We are going to use the Kruskal-Wallis test to determine the difference in variance for effects, hazard ratio, and time across sexes.
+
+*H~0~* : There exists no difference in medians in any effects, hazard ratio, or time odds across male and female subjects.
+
+*H~1~* : There exists a difference in medians in any effects, hazard ratio, or time across male and female subjects.\
+
+```{r}
+E3survhima_kruskal_sex <- perform_kruskal(E3survhima, "Sex", c(survHIMA.fit[,"Index"], "Direct", "Adjusted","Time"))
+E3survhima_kruskal_sex
+```
+
+The null hypothesis can be rejected. There exists a statistically significant difference in medians for the direct effect across male and female subjects.
+
+```{r}
+E3survhima$Sex <- ifelse(E3survhima$Sex == 0, "Male", "Female")
+E3survhima_sex_pl <- plot_violins(E3survhima, "Sex", "Direct", plotname = "Example 3 survHIMA Direct ~ Sex Violin Plot")
+E3survhima_sex_pl
+boot_tests(E3survhima, "Sex", "Direct", mean)
+```
+
+Females have increased sensitivity to the direct effect of the Treatment.
+
+##### Findings
+
+The results of **survHIMA** for Example 3 show:
+
+The values for each effect are not normally distributed.
+
+There exists positive correlation between M1 to M2 and M1 to M3.
+
+In the experimental group, there exists negative correlation between M2 to M1 and M3.
+
+There exists positive correlation with all mediator effects and hazard ratio.
+
+There exists negative correlation between the direct effect and time.
+
+There exists positive correlation with age to M2 and the direct effect.
+
+Females have increased sensitivity to the direct effect of the treatment.
+
+## Example 4 Data Overview
+
+### Dimensions of the Data
+
+```{r}
+dim(Example4$PhenoData)
+dim(Example4$Mediator)
+```
+
+### Data Overview
+
+Numerical Features
+
+```{r}
+# Histograms for numerical features
+num_vars <- sapply(Example4$PhenoData, is.numeric)
+data_numeric <- Example4$PhenoData[, num_vars]
+lapply(names(data_numeric), function(var) {
+  print(ggplot(Example4$PhenoData, aes_string(x = var)) + 
+        geom_histogram(binwidth = 1, fill = "blue", color = "black", alpha = 0.7) +
+        labs(title = paste("Distribution of", var)))
+})
+summary(Example4$PhenoData)
+```
+
+**Treatment**: A binary feature that indicates the presence of the treatment for a test subject. **1** indicates the presence of the treatment. **0** indicates the absence of the treatment.
+
+**Outcome**: A continuous numerical feature with unknown units of measurement.
+
+**Sex**: A binary feature that indicates the biological sex of the subject. **1** indicates females, and **0** indicates males.
+
+**Age**: A continuous numerical features that represents the age of the subject in years.
+
+Categorical Features
+
+```{r}
+# Bar plots for categorical features
+cat_vars <- sapply(Example2$PhenoData, is.factor)
+data_categorical <- Example2$PhenoData[, cat_vars, drop = FALSE]
+lapply(names(data_categorical), function(var) {
+  print(ggplot(Example2$PhenoData, aes_string(x = var)) + 
+        geom_bar(fill = "blue", color = "black", alpha = 0.7) +
+        labs(title = paste("Frequency of", var)))
+})
+```
+
+### Example 4 Prediction Model
+
+```{r example4_plot}
+plot_examples(Example4$PhenoData, plotname = "Example 4 Full Model Prediction Plot")
+```
+
+Clearly, the presence of treatment in conjunction with covariates do not accurately describe the relationship the presence of treatment has with the outcome. Mediation analysis must be performed to remedy this.
+
+### Mediation Analysis with microHIMA
+
+#### Mediator Identification
+
+```{r}
+head(himaDat$Example4$PhenoData)
+microHIMA.fit <- microHIMA(
+  X = himaDat$Example4$PhenoData$Treatment,
+  Y = himaDat$Example4$PhenoData$Outcome,
+  OTU = himaDat$Example4$Mediator,
+  COV = himaDat$Example4$PhenoData[, c("Sex", "Age")],
+  FDRcut = 0.05,
+  verbose = TRUE
+)
+microHIMA.fit
+summary(Example4$Mediator[,microHIMA.fit[,"Index"])
+```
+
+M1, M2, and M3 have been identified as the top three most significant mediator variables. (p \< 0.05)
+
+**alpha_hat** represents the effect the treatment has on the mediators.
+
+**beta_hat** represents the effect the mediators have towards the outcome.
+
+**IDE** stands for "Indirect Effect", and is the result of **alpha_hat\*beta_hat**.
+
+**rimp** stands for "Relative Importance" and represents the average percent contribution a mediator has towards the net Indirect Effect.
+
+```{r}
+E4micro <- estimatedEffects(fit = microHIMA.fit,
+                            betas = microHIMA.fit[,"beta_hat"],
+                            dat = himaDat$Example4,
+                            X = himaDat$Example4$PhenoData$Treatment,
+                            Y = himaDat$Example4$PhenoData$Outcome,
+                            Cov = himaDat$Example4$PhenoData[, c("Sex", "Age")]
+                            )
+E4micropl <- plot_mediator_adjustments(actual = himaDat$Example4$PhenoData$Outcome,
+                             estimations = E4micro,
+                             mediator_indices = microHIMA.fit[,"Index"],
+                             plotname = "Example Four Microbiome HIMA Outcome Predictions")
+E4micropl
+```
+
+The consideration of mediators allows the relationship between Treatment and Outcome to be much more accurately described.
+
+The contribution towards the outcome by each mediator is calculated as **M \* beta_hat.**
+
+The contribution towards the outcome by the Direct Effect is calculated as the **E(Y \| X, Cov) - IDE**.
+
+The mediator adjusted prediction is **E(Y \| X, M, Cov) = 𝛽\*M + E(Y \| X, Cov) - IDE**.
+
+#### Effect Analysis
+
+##### Test for Normality
+
+*H~0~* : The values for every type of measured effect are drawn from the normal distribution.
+
+*H~1~* : The values for every type of measured effect are drawn from outside the normal distribution.
+
+```{r}
+E4micro_control_ks_results <- kstests(dat = E4micro[E4micro$Treatment == 0,], exclude = c("Treatment","Sex","Other", "DominantEffect", "Direct"))
+print(data.frame(E4micro_control_ks_results))
+E4micro_experimental_ks_results <- kstests(dat = E4micro[E4micro$Treatment != 0,], exclude = c("Treatment","Sex","Other", "DominantEffect", "Direct"))
+print(data.frame(E4micro_experimental_ks_results))
+```
+
+##### Tests for Correlation
+
+We reject *H~0~* (p \< 0.05). In rejection of the null hypothesis, we shall test for whether there exists correlations between each mediator effect.
+
+*H~0~* : There exists no correlation between a mediator effect and any other mediator effect.
+
+*H~1~* : There exists a correlation between an effect and any other mediator effect.
+
+```{r}
+E4micro_effect_cor <- perform_cor_tests(E4micro, c(microHIMA.fit[,"Index"]), alternative = "two.sided", method = "spearman")
+E4micro_effect_cor
+```
+
+We fail to reject the null hypothesis(p \> 0.05): The correlations between each mediator are not statistically significant.
+
+*H~0~* : There exists no correlation between an effect and any other effect in the experimental group.
+
+*H~1~* : There exists a correlation between an effect and any other effect in the experimental group.
+
+```{r}
+E4micro_effect_cor_e <- perform_cor_tests(E4micro[E4micro$Treatment != 0,], c(microHIMA.fit[,"Index"], "Direct"), alternative = "two.sided", method = "spearman")
+E4micro_effect_cor_e
+```
+
+We reject the null hypothesis: There exists positive correlation between M1 and M2, and M1 and M3(adjusted p \< 0.05). We will conduct bootstrap sampling to find the true mean of each effect in the control group and experimental group.
+
+```{r}
+E4micro_control_long <- melt(E4micro[E4micro$Treatment == 0,microHIMA.fit[,"Index"]], variable.name = "Effect", value.name = "Contribution")
+head(E4micro_control_long)
+E4micro_control_pl <- plot_violins(E4micro_control_long, x = "Effect", y = "Contribution", "Example 4 Microbiome HIMA Control Group Effects")
+E4micro_control_boot <- boot_tests(data = E4micro_control_long, x = "Effect", y = "Contribution", statistic = mean)
+E4micro_control_boot
+E4micro_control_pl
+```
+
+```{r}
+E4micro_experimental_long <- melt(E4micro[E4micro$Treatment != 0,c(microHIMA.fit[,"Index"], "Direct")], variable.name = "Effect", value.name = "Contribution")
+head(E4micro_experimental_long)
+E4micro_experimental_pl <- plot_violins(E4micro_experimental_long, x = "Effect", y = "Contribution", "Example 4 Microbiome HIMA Experimental Group Effects")
+E4micro_experimental_boot <- boot_tests(data = E4micro_experimental_long, x = "Effect", y = "Contribution", statistic = mean)
+E4micro_experimental_boot
+```
+
+In the experimental group, the mean contributions of M1 are greater than they are in the control group, and the contributions of M2 and M3 are smaller than they are in the control group.
+
+We are going to test for correlations between effects and the measured outcome and residuals of the mediator adjusted prediction to the measured outcome.
+
+*H~0~* : There exists no correlation between any effect or the residuals and measured outcome.
+
+*H~1~* : There exists a correlation between any effect or the residuals and measured outcome.
+
+```{r}
+E4micro_effect_outcome_cor <- perform_cor_tests(E4micro, x = c(microHIMA.fit[,"Index"], "Direct", "Residuals"), y = "Outcome", alternative = "two.sided", method = "spearman")
+E4micro_effect_outcome_cor
+```
+
+We can reject the null hypothesis(adjusted p \< 0.05). For M1 and M2, there exists positive correlation to the outcome. The residuals of the model show a strong positive correlation with the Outcome, indicating that the magnitude of the outcome influences the inaccuracies in the model. We will move on to testing the correlation the effects and residuals have to the Age of the subjects.
+
+*H~0~* : There exists no correlation between any effect and age.
+
+*H~1~* : There exists a correlation between any effect and age.
+
+```{r}
+E4micro_effect_age_cor <- perform_cor_tests(E4micro, x = c(microHIMA.fit[,"Index"], "Direct", "Residuals"), y = "Age", alternative = "two.sided", method = "spearman")
+E4micro_effect_age_cor
+```
+
+We can reject the null hypothesis(p \< 0.05). For the direct effect, there is positive correlation to age. The correlation between Age and the residuals of the mediator adjusted model do not have statistical significance, suggesting that the age of the subject does not strongly influence the model's inaccuracies.
+
+##### Test for differences across groups
+
+We are going to use the Kruskal-Wallis test to determine the difference in variance for effects, residuals, and the outcome across sexes.
+
+*H~0~* : There exists no difference in medians in any effects and the outcome across male and female subjects.
+
+*H~1~* : There exists a difference in medians in any effects and the outcome across male and female subjects.\
+
+```{r}
+E4micro_kruskal_sex <- perform_kruskal(E4micro, "Sex", c(microHIMA.fit[,"Index"], "Direct", "Outcome", "Residuals"))
+E4micro_kruskal_sex
+```
+
+The null hypothesis can be rejected(adjusted p \< 0.05). There exists a statistically significant difference in medians for the direct effect across male and female subjects. The difference in variance in residuals in male subjects and female subjects is statistically insignificant, suggesting that the sex of the patient is not a limiting factor in the accuracy of the model.
+
+```{r}
+E4micro$Sex <- ifelse(E4micro$Sex == 0, "Male", "Female")
+E4micro_sex_pl <- plot_violins(E4micro, "Sex", "Direct", plotname = "Example 4 Microbiome HIMA Direct ~ Sex Violin Plot")
+E4micro_sex_pl
+boot_tests(E4micro, "Sex", "Direct", mean)
+```
+
+##### Findings
+
+The results of **microHIMA** for Example 4 show:
+
+The values for each effect are not normally distributed.
+
+In the experimental group, M1 has positive correlation with M2 and M3.
+
+The direct effect has a positive correlation with age.
+
+M1 and M2 have a positive correlation with the outcome.
+
+The residuals of the mediator-adjusted model have a positive correlation with the outcome.
+
+Females have greater sensitivity to the direct effect of the treatment than males.
+
+## Example 5 Data Overview
+
+### Dimensions of the Data
+
+```{r}
+dim(Example5$PhenoData)
+dim(Example5$Mediator)
+```
+
+### Data Overview
+
+Numerical Features
+
+```{r}
+# Histograms for numerical features
+num_vars <- sapply(Example5$PhenoData, is.numeric)
+data_numeric <- Example5$PhenoData[, num_vars]
+lapply(names(data_numeric), function(var) {
+  print(ggplot(Example5$PhenoData, aes_string(x = var)) + 
+        geom_histogram(binwidth = 1, fill = "blue", color = "black", alpha = 0.7) +
+        labs(title = paste("Distribution of", var)))
+})
+summary(Example5$Mediator)
+summary(Example5$PhenoData)
+```
+
+**Treatment**: The continuous exposure variable.
+
+**Outcome**: A continuous numerical feature with unknown units of measurement.
+
+**Sex**: A binary feature that indicates the biological sex of the subject. **1** indicates females, and **0** indicates males.
+
+**Age**: A continuous numerical features that represents the age of the subject in years.
+
+Categorical Features
+
+```{r}
+# Bar plots for categorical features
+cat_vars <- sapply(Example2$PhenoData, is.factor)
+data_categorical <- Example2$PhenoData[, cat_vars, drop = FALSE]
+lapply(names(data_categorical), function(var) {
+  print(ggplot(Example2$PhenoData, aes_string(x = var)) + 
+        geom_bar(fill = "blue", color = "black", alpha = 0.7) +
+        labs(title = paste("Frequency of", var)))
+})
+```
+
+### Example 5 Prediction Model
+
+```{r}
+plot_examples(Example5$PhenoData, plotname = "Example 5 Full Model Prediction Plot")
+```
+
+Clearly, the presence of treatment in conjunction with covariates accurately describes the relationship the treatment has with the outcome. Mediation analysis can help improve this.
+
+### Mediation Analysis with qHIMA
+
+#### Mediator Identification
+
+```{r}
+qHIMA.fit <- qHIMA(
+  X = himaDat$Example5$PhenoData$Treatment,
+  M = himaDat$Example5$Mediator,
+  Y = himaDat$Example5$PhenoData$Outcome,
+  COV = himaDat$Example5$PhenoData[, c("Sex", "Age")],
+  tau = c(0.3, 0.5, 0.7),
+  scale = FALSE, # Disabled only for simulation data
+  Bonfcut = 0.05,
+  verbose = TRUE
+)
+max_rimp <- aggregate(rimp ~ tau + Index, qHIMA.fit, max)
+qHIMA.fit <- merge(qHIMA.fit, max_rimp)
+qHIMA.fit <- qHIMA.fit[order(qHIMA.fit$tau),c("Index", "alpha_hat", "alpha_se", "beta_hat", "beta_se", "IDE", "rimp", "pmax", "tau")]
+qHIMA.fit
+summary(Example5$Mediator[,unique(qHIMA.fit[, "Index"])])
+
+```
+
+In the 30th quantile, M1, M2, and M3 have been identified as the top three most significant mediator variables. (p \< 0.05)
+
+In the 50th quantile, M1, M2, and M3 have been identified as the top three most significant mediator variables. (p \< 0.05)
+
+In the 70th quantile, M1, M2, and M3 have been identified as the top three most significant mediator variables. (p \< 0.05)
+
+**alpha_hat** represents the effect the treatment has on the mediators.
+
+**beta_hat** represents the effect the mediators have towards the outcome.
+
+**IDE** stands for "Indirect Effect", and is the result of **alpha_hat\*beta_hat**.
+
+**rimp** stands for "Relative Importance" and represents the average percent contribution a mediator has towards the net Indirect Effect.
+
+```{r}
+E5qhima30th <- data.frame(estimatedEffects(fit = qHIMA.fit[qHIMA.fit$tau == 0.3,],
+                              betas = qHIMA.fit[qHIMA.fit$tau == 0.3,"beta_hat"],
+                              type = "continuous",
+                              dat = himaDat$Example5,
+                              X = himaDat$Example5$PhenoData$Treatment,
+                              Y = himaDat$Example5$PhenoData$Outcome,
+                              Cov = himaDat$Example5$PhenoData[, c("Sex", "Age")]))
+
+E5qhima30th <- E5qhima30th[E5qhima30th$Outcome <= quantile(E5qhima30th$Outcome,0.3),]
+
+E5qhima50th <- estimatedEffects(fit = qHIMA.fit[qHIMA.fit$tau == 0.5,],
+                              betas = qHIMA.fit[qHIMA.fit$tau == 0.5,"beta_hat"],
+                              type = "continuous",
+                              dat = himaDat$Example5,
+                              X = himaDat$Example5$PhenoData$Treatment,
+                              Y = himaDat$Example5$PhenoData$Outcome,
+                              Cov = himaDat$Example5$PhenoData[, c("Sex", "Age")])
+E5qhima50th <- E5qhima50th[E5qhima50th$Outcome <= quantile(E5qhima50th$Outcome,0.5),]
+
+E5qhima70th <- estimatedEffects(fit = qHIMA.fit[qHIMA.fit$tau == 0.7,],
+                              betas = qHIMA.fit[qHIMA.fit$tau == 0.7,"beta_hat"],
+                              type = "continuous",
+                              dat = himaDat$Example5,
+                              X = himaDat$Example5$PhenoData$Treatment,
+                              Y = himaDat$Example5$PhenoData$Outcome,
+                              Cov = himaDat$Example5$PhenoData[, c("Sex", "Age")])
+E5qhima70th <- E5qhima70th[E5qhima70th$Outcome <= quantile(E5qhima70th$Outcome,0.7),]
+E5qhima_pls <- list()
+E5qhima_pls[["30th"]] <- plot_mediator_adjustments(actual = himaDat$Example5$PhenoData[himaDat$Example5$PhenoData$Outcome <= quantile(himaDat$Example5$PhenoData$Outcome, 0.3),]$Outcome,
+                             estimations = E5qhima30th,
+                             mediator_indices = qHIMA.fit[qHIMA.fit$tau == 0.3,"Index"],
+                             plotname = "Example Five 30th Percentile Quantile HIMA Outcome Predictions")
+E5qhima_pls[["50th"]] <- plot_mediator_adjustments(actual = (himaDat$Example5$PhenoData[himaDat$Example5$PhenoData$Outcome <= quantile(himaDat$Example5$PhenoData$Outcome, 0.5),]$Outcome),
+                           estimations = E5qhima50th,
+                           mediator_indices = qHIMA.fit[qHIMA.fit$tau == 0.5,"Index"],
+                           plotname = "Example Five 50th Percentile Quantile HIMA Outcome Predictions")
+E5qhima_pls[["70th"]] <- plot_mediator_adjustments(actual = (himaDat$Example5$PhenoData[himaDat$Example5$PhenoData$Outcome <= quantile(himaDat$Example5$PhenoData$Outcome, 0.7),]$Outcome),
+                           estimations = E5qhima70th,
+                           mediator_indices = qHIMA.fit[qHIMA.fit$tau == 0.7,"Index"],
+                           plotname = "Example Five 70th Percentile Quantile HIMA Outcome Predictions")
+lapply(names(E5qhima_pls), function(var) {
+  print(E5qhima_pls[[var]])
+})
+```
+
+The consideration of mediators allows the relationship between Treatment and Outcome to be more accurately described.
+
+The contribution towards the outcome by each mediator is calculated as **M \* beta_hat.**
+
+The contribution towards the outcome by the Direct Effect is calculated as the **E(Y \| X, Cov) - IDE**.
+
+The mediator adjusted prediction is **E(Y \| X, M, Cov) = 𝛽\*M + E(Y \| X, Cov) - IDE**.
+
+#### Effect Analysis
+
+##### Test for Normality
+
+*H~0~* : The values for every type of measured effect are drawn from the normal distribution.
+
+*H~1~* : The values for every type of measured effect are drawn from outside the normal distribution.
+
+```{r}
+E5qhima30th_ks_results <- kstests(dat = E5qhima30th, exclude = c("Sex","Other", "DominantEffect", "Direct"))
+E5qhima50th_ks_results <- kstests(dat = E5qhima50th, exclude = c("Sex","Other", "DominantEffect", "Direct"))
+E5qhima70th_ks_results <- kstests(dat = E5qhima70th, exclude = c("Sex","Other", "DominantEffect", "Direct"))
+
+list(E5qhima30th_ks_results,E5qhima50th_ks_results,E5qhima70th_ks_results)
+```
+
+##### Tests for Correlation
+
+We reject *H~0~* (p \< 0.05). In rejection of the null hypothesis, we shall test for whether there exists correlations between each mediator effect.
+
+*H~0~* : There exists no correlation between a mediator effect and any other mediator effect.
+
+*H~1~* : There exists a correlation between an effect and any other mediator effect.
+
+```{r}
+E5qhima30th_effect_cor <- perform_cor_tests(E5qhima30th, c(qHIMA.fit[qHIMA.fit[,"tau"] == 0.3,"Index"], "Direct"), alternative = "two.sided", method = "spearman")
+E5qhima50th_effect_cor <- perform_cor_tests(E5qhima50th, c(qHIMA.fit[qHIMA.fit[,"tau"] == 0.5,"Index"], "Direct"), alternative = "two.sided", method = "spearman")
+E5qhima70th_effect_cor <- perform_cor_tests(E5qhima70th, c(qHIMA.fit[qHIMA.fit[,"tau"] == 0.7,"Index"], "Direct"), alternative = "two.sided", method = "spearman")
+
+E5qhima30th_effect_cor
+E5qhima50th_effect_cor
+E5qhima70th_effect_cor
+```
+
+We can reject the null hypothesis(p \> 0.05): There exists positive correlation between all effects in the 30th quantile, 50th quantile, and 70th quantile.
+
+We will follow up testing for correlations between effects and the measured outcome and residuals of the mediator adjusted prediction to the measured outcome.
+
+*H~0~* : There exists no correlation between any effect or the residuals to the outcome.
+
+*H~1~* : There exists a correlation between any effect or the residuals to the outcome.
+
+```{r}
+E5qhima30th_effect_outcome_cor <- perform_cor_tests(E5qhima30th, c(qHIMA.fit[qHIMA.fit[,"tau"] == 0.3,"Index"], "Direct","Residuals"), "Outcome", alternative = "two.sided", method = "spearman")
+E5qhima50th_effect_outcome_cor <- perform_cor_tests(E5qhima50th, c(qHIMA.fit[qHIMA.fit[,"tau"] == 0.5,"Index"], "Direct","Residuals"), "Outcome", alternative = "two.sided", method = "spearman")
+E5qhima70th_effect_outcome_cor <- perform_cor_tests(E5qhima70th, c(qHIMA.fit[qHIMA.fit[,"tau"] == 0.7,"Index"], "Direct","Residuals"), "Outcome", alternative = "two.sided", method = "spearman")
+
+E5qhima30th_effect_outcome_cor
+E5qhima50th_effect_outcome_cor
+E5qhima70th_effect_outcome_cor
+```
+
+We can reject the null hypothesis(adjusted p \< 0.05). There exists positive correlation between all effects and the outcome in the 30th quantile, 50th quantile, and 70th quantile. The residuals of the model do not have statistical significance to the outcome in the 30th, 50th, and 70th quantiles. We will move on to testing the correlation the effects and residuals have to the Age of the subjects.
+
+*H~0~* : There exists no correlation between any effect or the residuals and age.
+
+*H~1~* : There exists a correlation between any effect or the residuals and age.
+
+```{r}
+E5qhima30th_effect_age_cor <- perform_cor_tests(E5qhima30th, c(qHIMA.fit[qHIMA.fit[,"tau"] == 0.3,"Index"], "Direct","Residuals"), "Age", alternative = "two.sided", method = "spearman")
+E5qhima50th_effect_age_cor <- perform_cor_tests(E5qhima50th, c(qHIMA.fit[qHIMA.fit[,"tau"] == 0.5,"Index"], "Direct","Residuals"), "Age", alternative = "two.sided", method = "spearman")
+E5qhima70th_effect_age_cor <- perform_cor_tests(E5qhima70th, c(qHIMA.fit[qHIMA.fit[,"tau"] == 0.7,"Index"], "Direct","Residuals"), "Age", alternative = "two.sided", method = "spearman")
+
+E5qhima30th_effect_age_cor
+E5qhima50th_effect_age_cor
+E5qhima70th_effect_age_cor
+```
+
+We can reject the null hypothesis(adjusted p \< 0.05). In the 30th quantile, M3 has a negative correlation with Age, and the direct effect has a positive correlation with age. In the 50th quantile, there is positive correlation between the direct effect and age, and negative correlation between the residuals and age.
+
+In the 70th quantile, there is negative correlation between the direct effect and age, and negative correlation between the residuals and age. This suggests that the model is more accurate for older subjects.
+
+We will follow up by testing for the correlation between the treatment and the residuals of the mediator adjusted model.
+
+*H~0~* : There exists no correlation between the residuals and the treatment.
+
+*H~1~* : There exists a correlation between the residuals and the treatment.
+
+```{r}
+E5qhima30th_treatment_res_cor <- cor.test(E5qhima30th$Treatment, E5qhima30th$Residuals,method = "spearman", alternative = "two.sided")
+
+E5qhima50th_treatment_res_cor <- cor.test(E5qhima50th$Treatment, E5qhima50th$Residuals,method = "spearman", alternative = "two.sided")
+
+E5qhima70th_treatment_res_cor <- cor.test(E5qhima70th$Treatment, E5qhima70th$Residuals,method = "spearman", alternative = "two.sided")
+
+E5qhima30th_treatment_res_cor
+E5qhima50th_treatment_res_cor
+E5qhima70th_treatment_res_cor
+```
+
+We can reject the null hypothesis(adjusted p \< 0.05). In the 30th quantile, 50th quantile, and 70th quantile, there is negative correlation between the treatment and the residuals, implying that the model has greater inaccuracies when the treatment is smaller.
+
+##### Test for differences across groups
+
+We are going to use the Kruskal-Wallis test to determine the difference in variance for effects, residuals, and the outcome across sexes.
+
+*H~0~* : There exists no difference in medians in any effects and the outcome across male and female subjects.
+
+*H~1~* : There exists a difference in medians in any effects and the outcome across male and female subjects.\
+
+```{r}
+E5qhima30th_kruskal_sex <- perform_kruskal(E5qhima30th, "Sex", c(qHIMA.fit[qHIMA.fit$tau == 0.3,"Index"], "Direct", "Outcome", "Residuals"))
+E5qhima50th_kruskal_sex <- perform_kruskal(E5qhima50th, "Sex", c(qHIMA.fit[qHIMA.fit$tau == 0.5,"Index"], "Direct", "Outcome", "Residuals"))
+E5qhima70th_kruskal_sex <- perform_kruskal(E5qhima70th, "Sex", c(qHIMA.fit[qHIMA.fit$tau == 0.7,"Index"], "Direct", "Outcome", "Residuals"))
+
+E5qhima30th_kruskal_sex
+E5qhima50th_kruskal_sex
+E5qhima70th_kruskal_sex
+```
+
+The null hypothesis cannot be rejected(adjusted p \> 0.05). In the 30th quantile, 50th quantile, and 70th quantile, there is no difference in medians for Outcome, Effects, or residuals for males and females.
+
+##### Findings
+
+The results of **qHIMA** for Example 5 show:
+
+The values for each effect are not normally distributed.
+
+The model's accuracy decreases for smaller treatment values.
+
+All effects have positive correlation with one another.
+
+All effects have positive correlation with the outcome.
+
+In the 30th quantile:\
+There exists negative correlation between M3 and age.
+
+There exists positive correlation between the direct effect and age.
+
+In the 50th quantile:
+
+There is positive correlation between the direct effect and age.
+
+There is negative correlation between the residuals and age.
+
+In the 70th quantile:
+
+There is positive correlation between the direct effect and age.
+
+There is negative correlation between residuals and age.
+
+### Conclusion
+
+Without the use of mediation analysis, the relationship between treatment and outcome for all these examples would not be understood. Through mediation analysis, we are able to break our outcome into components to better understand the ways in which the treatment works. These components make it easier to find the influence covariates may have with the treatment, through finding their relationship with the mediator(s). The HIMA library makes all of this possible for many kinds of data, even with hundreds of mediators that can be considered.
